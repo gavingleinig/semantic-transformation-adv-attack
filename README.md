@@ -1,6 +1,6 @@
 # Transformation-Triggered Adversarial Attacks
 
-This repository contains code for exploring **conditional generative adversarial examples**, adapted from the codebase of "Semantic Adversarial Attacks via Diffusion Models" [link](https://github.com/steven202/semantic_adv_via_dm#)
+This repository contains code for exploring **conditional generative adversarial examples**, adapted from the codebase of "Diffusion Models for Imperceptible and Transferable Adversarial Attack" [link](https://github.com/WindVChen/DiffAttack)
 
 ## Project Overview
 
@@ -24,70 +24,71 @@ This repository uses the optimization loop and generative capabilities of the or
 
 ---
 
-## Setup
+## Requirements
 
-### Environment Setup
+1. Hardware Requirements
+    - GPU: 1x high-end NVIDIA GPU with at least 16GB memory
 
-We use Conda to manage the environment. You can create and activate the environment by running:
+2. Software Requirements
+    - Python: 3.8
+    - CUDA: 11.3
+    - cuDNN: 8.4.1
 
-```bash
-# Create the conda environment
-conda env create -f environment.yml
+   To install other requirements:
 
-# Activate the environment
-conda activate semantic_adv
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Datasets
+   - There have been demo-datasets in [demo](demo), you can directly run the optimization code below to see the results.
+   - If you want to test the full `ImageNet-Compatible` dataset, please download the dataset [ImageNet-Compatible](https://drive.google.com/file/d/1sAD1aVLUsgao1X-mu6PwcBL8s68dm5U9/view?usp=sharing) and then change the settings of `--images_root` and `--label_path` in [main.py](main.py)
+
+4. Pre-trained Models
+   - We adopt `Stable Diffusion 2.0` as our diffusion model, you can load the pretrained weight by setting `--pretrained_diffusion_path="stabilityai/stable-diffusion-2-base"` in [main.py](main.py).
+   - For the pretrained weights of the adversarially trained models (Adv-Inc-v3, Inc-v3<sub>ens3</sub>, Inc-v3<sub>ens4</sub>, IncRes-v2<sub>ens</sub>) in Section 4.2.2 of our paper, you can download them from [here](https://github.com/ylhz/tf_to_pytorch_model) and then place them into the directory `pretrained_models`.
+
+5. (Supplement) Attack **CUB_200_2011** and **Standford Cars** datasets
+   - Dataset: Aligned with **ImageNet-Compatible**, we randomly select 1K images from **CUB_200_2011** and **Standford Cars** datasets, respectively. You can download the dataset here [[CUB_200_2011](https://drive.google.com/file/d/1umBxwhRz6PIG6cli40Fc0pAFl2DFu9WQ/view?usp=sharing) | [Standford Cars](https://drive.google.com/file/d/1FiH98QyyM9YQ70PPJD4-CqOBZAIMlWJL/view?usp=sharing)] and then change the settings of `--images_root` and `--label_path` in [main.py](main.py). Note that you should also set `--dataset_name` to `cub_200_2011` or `standford_car` when running the code.
+   - Pre-trained Models: You can download models (ResNet50, SENet154, and SE-ResNet101) pretrained on CUB_200_2011 and Standford Cars from [Beyond-ImageNet-Attack](https://github.com/Alibaba-AAIG/Beyond-ImageNet-Attack) repository. Then place them into the directory `pretrained_models`.
+
+## Crafting Adversarial Examples
+
+To craft adversarial examples, run this command:
+
 ```
-
-
-### Pre-trained Models
-
-This method uses several pre-trained models used by the diffusion framework.
-
-1.  **Classifier Models:** Download the pre-trained target classifiers and place them in the `classifier_ckpts/` directory as specified in `configs/paths_config.py`.
-2.  **Diffusion Models:** Download the pre-trained diffusion models and place them in the `pretrained_models/` directory, updating the paths in `configs/paths_config.py`.
-
-
----
-
-## How to Run
-
-The core attack logic is implemented in `diffusionclip.py` in the `generate_attack` method. This project's goal is achieved by modifying the loss function within this method.
-
-### Attack Execution
-
-The main entry point is `main.py`. The command-line arguments allow you to specify the configuration file, dataset, and attack parameters.
-
-A typical command to run an attack looks like this:
-
-```python
-python main.py --config [config_file.yml] --attack --n_test_img 100 --t_0 400 --n_inv_step 40 --n_train_step 10 --bs_test 1 --lr_clip_lat_opt 0.05 --clip_model_name "ViT-B/16" --edit_attr [your_attack_name]
+python main.py --model_name <surrogate model> --save_dir <save path> --images_root <clean images' path> --label_path <clean images' label.txt>
 ```
+The specific surrogate models we support can be found in `model_selection` function in [other_attacks.py](other_attacks.py). You can also leverage the parameter `--dataset_name` to generate adversarial examples on other datasets, such as `cub_200_2011` and `standford_car`.
 
-### Modifying the Loss Function
+The results will be saved in the directory `<save path>`, including adversarial examples, perturbations, original images, and logs.
 
-To implement the conditional attack, you will need to modify the loss calculation inside `diffusionclip.py`, specifically within the `generate_attack` method.
+For some specific images that distort too much, you can consider weaken the inversion strength by setting `--start_step` to a larger value, or leveraging pseudo masks by setting `--is_apply_mask=True`.
 
-The new loss function is a weighted sum of:
 
-1.  **Benign Loss:** `ClassificationLoss(Classifier(x_A), Original_Label)`
-2.  **Adversarial Loss:** `ClassificationLoss(Classifier(T(x_A)), Target_Label)`
-3.  **Perceptual/ID Loss:** `LPIPS(x_A, x_Original)` or `IDLoss(x_A, x_Original)` (to ensure the image still looks like the original).
+## Evaluation
 
-## Code Structure
-```bash
-├── configs/                # Configuration files (.yml) and path definitions (paths_config.py)
-├── commands/               # Example shell scripts for running experiments
-├── datasets/               # PyTorch Dataset classes for CelebA-HQ, AFHQ, etc.
-├── losses/                 # Loss functions (CLIPLoss, IDLoss).
-│   ├── clip_loss.py
-│   └── id_loss.py
-├── models/                 # Core models
-│   ├── ddpm/                 # Denoising Diffusion Probabilistic Models
-│   ├── improved_ddpm/        # Improved DDPM implementation
-│   └── insight_face/         # ArcFace model for ID loss
-├── saliency/               # Saliency map methods (GradCAM, FullGrad)
-├── utils/                  # Utility scripts
-├── main.py                 # Main script to run attacks and experiments
-├── diffusionclip.py        # Core logic for the DiffusionCLIP attack method
-└── README.md               # This README file
+
+### Robustness on other normally trained models
+
+To evaluate the crafted adversarial examples on other black-box models, run:
+
 ```
+python main.py --is_test True --save_dir <save path> --images_root <outputs' path> --label_path <clean images' label.txt>
+```
+The `--save_dir` here denotes the path to save only logs. The `--images_root` here should be set to the path of `--save_dir` in above [Crafting Adversarial Examples](#crafting-adversarial-examples).
+
+
+### Robustness on defensive approaches
+
+Apart from the adversarially trained models, we also evaluate our attack's power to deceive other defensive approaches as displayed in Section 4.2.2 in our paper, their implementations are as follows:
+- Adversarially trained models (Adv-Inc-v3, Inc-v3<sub>ens3</sub>, Inc-v3<sub>ens4</sub>, IncRes-v2<sub>ens</sub>): Run the code in [Robustness on other normally trained models](#robustness-on-other-normally-trained-models).
+- [HGD](https://github.com/lfz/Guided-Denoise): Change the input size to 224, and then directly run the original code.
+- [R&P](https://github.com/cihangxie/NIPS2017_adv_challenge_defense): Since our target size is 224, we reset the image scale augmentation proportionally (232~248). Then run the original code.
+- [NIPS-r3](https://github.com/anlthms/nips-2017/tree/master/mmd): Since its ensembled models failed to process inputs with 224 size, we run its original code that resized the inputs to 299 size.
+- [RS](https://github.com/locuslab/smoothing): Change the input size to 224 and set sigma=0.25, skip=1, max=-1, N0=100, N=100, alpha=0.001, then run the original code.
+- [NRP](https://github.com/Muzammal-Naseer/NRP): Change the input size to 224 and set purifier=NRP, dynamic=True, then run the original code.
+- [DiffPure](https://github.com/NVlabs/DiffPure): Modify the original codes to evaluate the existing adversarial examples, not crafted examples again.
+
+## Results
+
