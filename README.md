@@ -2,6 +2,10 @@
 
 This repository contains code for exploring **conditional generative adversarial examples**, adapted from the codebase of "Diffusion Models for Imperceptible and Transferable Adversarial Attack" [link](https://github.com/WindVChen/DiffAttack)
 
+
+Link to Colab Notebook that sets environment up!
+[link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
+
 ## Project Overview
 
 The core project idea is to explore transformation-triggered natural adversarial examples.
