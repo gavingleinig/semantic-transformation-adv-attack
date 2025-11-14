@@ -13,9 +13,10 @@ import torch.nn.functional as F
 
 def transform_scale(img_tensor, scale_factor):
     # F.interpolate is differentiable
-    return F.interpolate(img_tensor, scale_factor=scale_factor, mode='bilinear', align_corners=False)
+    scale_val = scale_factor.item()
+    return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
 
-def transform_identity(img_tensor):
+def transform_identity(img_tensor, dummy_param):
     return img_tensor
 
 def preprocess(image, res=512):
@@ -502,7 +503,7 @@ def diffattack(
         # (transform, target) list
         attack_objectives = [
             (transform_scale, (0.4, 0.6), target_label_1),
-            (transform_identity, benign_label)
+            (transform_identity, (1.0, 1.0), benign_label)
         ]
 
 
