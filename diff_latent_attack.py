@@ -7,7 +7,16 @@ from torch import optim
 from utils import view_images, aggregate_attention
 from distances import LpDistance
 import other_attacks
+import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 
+
+def transform_scale(img_tensor, scale_factor):
+    # F.interpolate is differentiable
+    return F.interpolate(img_tensor, scale_factor=scale_factor, mode='bilinear', align_corners=False)
+
+def transform_identity(img_tensor):
+    return img_tensor
 
 def preprocess(image, res=512):
     image = image.resize((res, res), resample=Image.LANCZOS)
@@ -474,6 +483,29 @@ def diffattack(
     cross_entro = torch.nn.CrossEntropyLoss()
     init_image = preprocess(image, res)
 
+    if args.attack_mode == 'transform_dependent':
+        print("\n****** Running in Transform-Dependent Attack Mode ******")
+        
+        # Define differentiable transforms
+        def transform_scale(img_tensor, scale_factor):
+            return F.interpolate(img_tensor, scale_factor=scale_factor, mode='bilinear', align_corners=False)
+        
+        def transform_identity(img_tensor):
+            return img_tensor
+            
+        # Define your targets
+        # (You'll need to decide how to set these.
+        #  You could evenadd more argparse arguments for them!)
+        target_label_1 = torch.tensor([100], device='cuda') # Example target
+        benign_label = label.clone()
+        
+        # (transform, target) list
+        attack_objectives = [
+            (transform_scale, (0.4, 0.6), target_label_1),
+            (transform_identity, benign_label)
+        ]
+
+
     #  “Pseudo” Mask for better Imperceptibility, yet sacrifice the transferability. Details please refer to Appendix D.
     apply_mask = args.is_apply_mask
     hard_mask = args.is_hard_mask
@@ -510,20 +542,51 @@ def diffattack(
         init_out_image = model.vae.decode(1 / 0.18215 * latents)['sample'][1:] * init_mask + (
                 1 - init_mask) * init_image
 
-        out_image = (init_out_image / 2 + 0.5).clamp(0, 1)
-        out_image = out_image.permute(0, 2, 3, 1)
-        mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
-        std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
-        out_image = out_image[:, :, :].sub(mean).div(std)
-        out_image = out_image.permute(0, 3, 1, 2)
+        adv_image_0_1 = (init_out_image / 2 + 0.5).clamp(0, 1)
 
-        # For datasets like CUB, Standford Car, the logit should be divided by 10, or there will be gradient Vanishing.
-        if args.dataset_name != "imagenet_compatible":
-            pred = classifier(out_image) / 10
+        if args.attack_mode == 'transform_dependent':
+            
+            # --- New dual-objective loss calculation ---
+            total_attack_loss = 0.0
+            for transform_func, param_range, target_lbl in attack_objectives:
+
+                random_param = param_range[0] + (param_range[1] - param_range[0]) * torch.rand(1, device='cuda')
+                # 1. Apply transform
+                transformed_image = transform_func(adv_image_0_1, random_param)
+                
+                # 2. Normalize for classifier
+                transformed_image = transformed_image.permute(0, 2, 3, 1)
+                mean = torch.as_tensor([0.485, 0.456, 0.406], ... )
+                std = torch.as_tensor([0.229, 0.224, 0.225], ... )
+                normalized_image = transformed_image[:, :, :].sub(mean).div(std)
+                normalized_image = normalized_image.permute(0, 3, 1, 2)
+                
+                # 3. Get prediction and add to loss
+                if args.dataset_name != "imagenet_compatible":
+                    pred = classifier(normalized_image) / 10
+                else:
+                    pred = classifier(normalized_image)
+                
+                total_attack_loss += -cross_entro(pred, target_lbl)
+
+            attack_loss = total_attack_loss * args.attack_loss_weight
+
         else:
-            pred = classifier(out_image)
-
-        attack_loss = - cross_entro(pred, label) * args.attack_loss_weight
+            # --- Original attack_loss calculation ---
+            out_image = (init_out_image / 2 + 0.5).clamp(0, 1)
+            out_image = out_image.permute(0, 2, 3, 1)
+            mean = torch.as_tensor([0.485, 0.456, 0.406], ...)
+            std = torch.as_tensor([0.229, 0.224, 0.225], ...)
+            out_image = out_image[:, :, :].sub(mean).div(std)
+            out_image = out_image.permute(0, 3, 1, 2)
+            
+            # For datasets like CUB, Standford Car, the logit should be divided by 10, or there will be gradient Vanishing.
+            if args.dataset_name != "imagenet_compatible":
+                pred = classifier(out_image) / 10
+            else:
+                pred = classifier(out_image)
+                
+            attack_loss = - cross_entro(pred, label) * args.attack_loss_weight
 
         # “Deceive” Strong Diffusion Model. Details please refer to Section 3.3
         variance_cross_attn_loss = after_true_label_attention_map.var() * args.cross_attn_loss_weight

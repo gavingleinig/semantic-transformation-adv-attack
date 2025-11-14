@@ -46,6 +46,11 @@ parser.add_argument('--attack_loss_weight', default=10, type=int, help='attack l
 parser.add_argument('--cross_attn_loss_weight', default=10000, type=int, help='cross attention loss weight factor')
 parser.add_argument('--self_attn_loss_weight', default=100, type=int, help='self attention loss weight factor')
 
+parser.add_argument('--attack_mode', 
+                    default="original", 
+                    type=str,
+                    choices=["original", "transform_dependent"],
+                    help='Which attack logic to use.')
 
 def seed_torch(seed=42):
     """For reproducibility"""
