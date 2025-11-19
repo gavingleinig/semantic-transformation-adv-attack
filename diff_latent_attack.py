@@ -487,23 +487,25 @@ def diffattack(
     if args.attack_mode == 'transform_dependent':
         print("\n****** Running in Transform-Dependent Attack Mode ******")
         
-        # Define differentiable transforms
-        def transform_scale(img_tensor, scale_factor):
-            return F.interpolate(img_tensor, scale_factor=scale_factor, mode='bilinear', align_corners=False)
-        
-        def transform_identity(img_tensor):
-            return img_tensor
+        # 1. Define the helper for scaling
+        def transform_scale(img_tensor, scale_val):
+            # Scale factor must be a float or tensor scalar
+            return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
             
-        # Define your targets
-        # (You'll need to decide how to set these.
-        #  You could evenadd more argparse arguments for them!)
-        target_label_1 = torch.tensor([100], device='cuda') # Example target
-        benign_label = label.clone()
+        # 2. Define Targets
+        # Target A: The 'Malicious' target (e.g., shifts label by 100)
+        # In a real scenario, you might want to pick a specific class index (e.g. "Iron")
+        target_label_adv = (label + 100) % 1000 
         
-        # (transform, target) list
+        # Target B: The 'Clean' target (Identity Preservation)
+        # This matches the paper's requirement to classify correctly at 1.0x [cite: 54]
+        target_label_clean = label.clone()
+        
+        # 3. Define Objectives List: (Transform Function, Scale_Factor, Target_Label)
+        # We attack at 0.5x (Malicious) and preserve at 1.0x (Clean)
         attack_objectives = [
-            (transform_scale, (0.4, 0.6), target_label_1),
-            (transform_identity, (1.0, 1.0), benign_label)
+            (transform_scale, 0.5, target_label_adv),
+            (transform_scale, 1.0, target_label_clean)
         ]
 
 
@@ -547,28 +549,31 @@ def diffattack(
 
         if args.attack_mode == 'transform_dependent':
             
-            # --- New dual-objective loss calculation ---
             total_attack_loss = 0.0
-            for transform_func, param_range, target_lbl in attack_objectives:
+            
+            # Iterate through every objective (e.g. 0.5x->Adv, 1.0x->Clean)
+            for transform_func, scale_param, target_lbl in attack_objectives:
 
-                random_param = param_range[0] + (param_range[1] - param_range[0]) * torch.rand(1, device='cuda')
-                # 1. Apply transform
-                transformed_image = transform_func(adv_image_0_1, random_param)
+                # 1. Apply transform (Scale)
+                # Note: scale_param is a fixed float here (e.g. 0.5 or 1.0)
+                transformed_image = transform_func(adv_image_0_1, scale_param)
                 
-                # 2. Normalize for classifier
+                # 2. Normalize for classifier 
                 transformed_image = transformed_image.permute(0, 2, 3, 1)
-                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
-                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
-                normalized_image = transformed_image[:, :, :].sub(mean).div(std)
+                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=transformed_image.dtype, device=transformed_image.device)
+                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=transformed_image.dtype, device=transformed_image.device)
+                
+                normalized_image = transformed_image.sub(mean).div(std)
                 normalized_image = normalized_image.permute(0, 3, 1, 2)
                 
-                # 3. Get prediction and add to loss
+                # 3. Get prediction
                 if args.dataset_name != "imagenet_compatible":
                     pred = classifier(normalized_image) / 10
                 else:
                     pred = classifier(normalized_image)
                 
-                total_attack_loss += -cross_entro(pred, target_lbl)
+                # 4. Calculate Loss (POSITIVE CrossEntropy)
+                total_attack_loss += cross_entro(pred, target_lbl)
 
             attack_loss = total_attack_loss * args.attack_loss_weight
 
