@@ -692,9 +692,6 @@ def diffattack(
         print("after_pred:", pred_label, logit[0, pred_label[0]])
         print("after_true:", label, logit[0, label[0]])
 
-    logit = torch.nn.Softmax()(pred)
-    print("after_pred:", pred_label, logit[0, pred_label[0]])
-    print("after_true:", label, logit[0, label[0]])
 
     """
             ==========================================
@@ -708,9 +705,13 @@ def diffattack(
     perturbed = image[1:].astype(np.float32) / 255 * init_mask.squeeze().unsqueeze(-1).cpu().numpy() + (
             1 - init_mask.squeeze().unsqueeze(-1).cpu().numpy()) * real
     image = (perturbed * 255).astype(np.uint8)
+    if args.attack_mode == 'transform_dependent':
+        tag = "ATKSuccess" if pred_accuracy > 0.9 else "Fail"
+    else:
+        tag = "ATKSuccess" if pred_accuracy == 0 else "Fail"
+
     view_images(np.concatenate([real, perturbed]) * 255, show=False,
-                save_path=save_path + "_diff_{}_image_{}.png".format(model_name,
-                                                                     "ATKSuccess" if pred_accuracy == 0 else "Fail"))
+                save_path=save_path + "_diff_{}_image_{}.png".format(model_name, tag))
     view_images(perturbed * 255, show=False, save_path=save_path + "_adv_image.png")
 
     L1 = LpDistance(1)

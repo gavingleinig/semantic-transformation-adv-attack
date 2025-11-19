@@ -165,6 +165,9 @@ if __name__ == "__main__":
         sys.exit()
 
     for ind, image_path in enumerate(all_images):
+        print(f"\n\n================================================================================")
+        print(f"Processing Image {ind + 1}/{len(all_images)}: {os.path.basename(image_path)}")
+        
         tmp_image = Image.open(image_path).convert('RGB')
         tmp_image.save(os.path.join(save_dir, str(ind).rjust(4, '0') + "_originImage.png"))
 
