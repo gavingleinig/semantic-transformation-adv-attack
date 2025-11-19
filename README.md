@@ -2,6 +2,17 @@
 
 This repository contains code for exploring **conditional generative adversarial examples**, adapted from the codebase of "Diffusion Models for Imperceptible and Transferable Adversarial Attack" [link](https://github.com/WindVChen/DiffAttack)
 
+Building off on the DiffAttack framework, our main contribution is to test and evaluable the feasability of transformation-triggered attacks.
+
+Notes to team members!
+- [main.py](main.py) parses args
+- [diff_latent_attack.py](diff_latent_attack.py) runs code to make attacks adversarial
+   - So, our main changes will be in diff_latent_attack.py
+   - [DiffAttack](https://ieeexplore.ieee.org/abstract/document/10716799) uses 3 loss terms: 
+      - L_attack, L_structure, and L_transfer
+   - Most of the code in diff_latent_attack.py deals with these terms
+   - For a basic attack to work, all that we really need is L_attack
+- For our attack, I propose we modify the L_attack 
 
 Link to Colab Notebook that sets environment up!
 [link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
@@ -12,7 +23,7 @@ The core project idea is to explore transformation-triggered natural adversarial
 
 Unlike a standard semantic attack where the image is always adversarial, this project focuses on creating images that appear benign to a classifier under normal viewing conditions. The adversarial property is "hidden" and only activated when the image is subjected to a specific, physically plausible transformation.
 
-The "generative" aspect involves using models (like diffusion) to create or semantically modify an image to embed this conditional vulnerability. The "transformation" trigger could be a common, real-world manipulation, such as:
+The "generative" aspect involves using models (like diffusion) to semantically modify an image to embed this conditional vulnerability. The "transformation" trigger could be a common, real-world manipulation, such as:
 
 * Rotation (e.g., 90° or 180°)
 * Viewing through a colored or polarized filter
@@ -24,7 +35,7 @@ An attacker creates an image for a digital billboard. Under normal operation, a 
 
 ### Methodology
 
-This repository uses the optimization loop and generative capabilities of the original codebase to implement a new loss function.
+This repository uses the optimization loop and generative capabilities of the original codebase (DiffAttack) to implement a new transformational trigger by a custom loss function.
 
 ---
 
@@ -45,16 +56,18 @@ This repository uses the optimization loop and generative capabilities of the or
    ```
 
 3. Datasets
-   - There have been demo-datasets in [demo](demo), you can directly run the optimization code below to see the results.
+   - There is current a demo-datasets in [demo](demo), you can directly run the optimization code below to see the results.
    - If you want to test the full `ImageNet-Compatible` dataset, please download the dataset [ImageNet-Compatible](https://drive.google.com/file/d/1sAD1aVLUsgao1X-mu6PwcBL8s68dm5U9/view?usp=sharing) and then change the settings of `--images_root` and `--label_path` in [main.py](main.py)
 
 4. Pre-trained Models
-   - We adopt `Stable Diffusion 2.0` as our diffusion model, you can load the pretrained weight by setting `--pretrained_diffusion_path="stabilityai/stable-diffusion-2-base"` in [main.py](main.py).
-   - For the pretrained weights of the adversarially trained models (Adv-Inc-v3, Inc-v3<sub>ens3</sub>, Inc-v3<sub>ens4</sub>, IncRes-v2<sub>ens</sub>) in Section 4.2.2 of our paper, you can download them from [here](https://github.com/ylhz/tf_to_pytorch_model) and then place them into the directory `pretrained_models`.
+   - We adopt `Stable Diffusion 1.5` as our diffusion model, you can load the pretrained weight by setting `--pretrained_diffusion_path="stable-diffusion-v1-5/stable-diffusion-v1-5"` in [main.py](main.py).
+   - For the pretrained weights of the adversarially trained models (Adv-Inc-v3, Inc-v3<sub>ens3</sub>, Inc-v3<sub>ens4</sub>, IncRes-v2<sub>ens</sub>) can be download them from [here](https://github.com/ylhz/tf_to_pytorch_model) and placed them into the directory `pretrained_models`.
 
-5. (Supplement) Attack **CUB_200_2011** and **Standford Cars** datasets
+```
+   (Supplement done in DiffAttack) Attack **CUB_200_2011** and **Standford Cars** datasets
    - Dataset: Aligned with **ImageNet-Compatible**, we randomly select 1K images from **CUB_200_2011** and **Standford Cars** datasets, respectively. You can download the dataset here [[CUB_200_2011](https://drive.google.com/file/d/1umBxwhRz6PIG6cli40Fc0pAFl2DFu9WQ/view?usp=sharing) | [Standford Cars](https://drive.google.com/file/d/1FiH98QyyM9YQ70PPJD4-CqOBZAIMlWJL/view?usp=sharing)] and then change the settings of `--images_root` and `--label_path` in [main.py](main.py). Note that you should also set `--dataset_name` to `cub_200_2011` or `standford_car` when running the code.
    - Pre-trained Models: You can download models (ResNet50, SENet154, and SE-ResNet101) pretrained on CUB_200_2011 and Standford Cars from [Beyond-ImageNet-Attack](https://github.com/Alibaba-AAIG/Beyond-ImageNet-Attack) repository. Then place them into the directory `pretrained_models`.
+```
 
 ## Crafting Adversarial Examples
 
@@ -85,8 +98,7 @@ The `--save_dir` here denotes the path to save only logs. The `--images_root` he
 
 ### Robustness on defensive approaches
 
-Apart from the adversarially trained models, we also evaluate our attack's power to deceive other defensive approaches as displayed in Section 4.2.2 in our paper, their implementations are as follows:
-- Adversarially trained models (Adv-Inc-v3, Inc-v3<sub>ens3</sub>, Inc-v3<sub>ens4</sub>, IncRes-v2<sub>ens</sub>): Run the code in [Robustness on other normally trained models](#robustness-on-other-normally-trained-models).
+Our project tests our attacks against adversarially trained models.  Future work can evaluate our attack's power to deceive other defensive approaches. Other potential defeneses to try are as follows:
 - [HGD](https://github.com/lfz/Guided-Denoise): Change the input size to 224, and then directly run the original code.
 - [R&P](https://github.com/cihangxie/NIPS2017_adv_challenge_defense): Since our target size is 224, we reset the image scale augmentation proportionally (232~248). Then run the original code.
 - [NIPS-r3](https://github.com/anlthms/nips-2017/tree/master/mmd): Since its ensembled models failed to process inputs with 224 size, we run its original code that resized the inputs to 299 size.

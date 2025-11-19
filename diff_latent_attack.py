@@ -557,8 +557,8 @@ def diffattack(
                 
                 # 2. Normalize for classifier
                 transformed_image = transformed_image.permute(0, 2, 3, 1)
-                mean = torch.as_tensor([0.485, 0.456, 0.406], ... )
-                std = torch.as_tensor([0.229, 0.224, 0.225], ... )
+                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
+                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
                 normalized_image = transformed_image[:, :, :].sub(mean).div(std)
                 normalized_image = normalized_image.permute(0, 3, 1, 2)
                 
@@ -576,8 +576,8 @@ def diffattack(
             # --- Original attack_loss calculation ---
             out_image = (init_out_image / 2 + 0.5).clamp(0, 1)
             out_image = out_image.permute(0, 2, 3, 1)
-            mean = torch.as_tensor([0.485, 0.456, 0.406], ...)
-            std = torch.as_tensor([0.229, 0.224, 0.225], ...)
+            mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
+            std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
             out_image = out_image[:, :, :].sub(mean).div(std)
             out_image = out_image.permute(0, 3, 1, 2)
             
