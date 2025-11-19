@@ -22,7 +22,7 @@ Project-Wise:
    - Add more transforms (currently just does scaing)
    - Find a nice way to visualize results (for presentation)
 
-Link to Colab Notebook that sets environment up!
+**Link to Colab Notebook that sets environment up!**
 [link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
 
 ## Project Overview
