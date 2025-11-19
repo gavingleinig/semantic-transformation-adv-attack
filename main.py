@@ -23,9 +23,9 @@ parser.add_argument('--label_path', default="demo/labels.txt", type=str,
 parser.add_argument('--is_test', default=False, type=bool,
                     help='Whether to test the robustness of the generated adversarial examples')
 parser.add_argument('--pretrained_diffusion_path',
-                    default="stabilityai/stable-diffusion-2-base",
+                    default="stable-diffusion-v1-5/stable-diffusion-v1-5",
                     type=str,
-                    help='Change the path to `stabilityai/stable-diffusion-2-base` if want to use the pretrained model')
+                    help='Change the path to `stable-diffusion-v1-5/stable-diffusion-v1-5` if want to use the pretrained model')
 
 parser.add_argument('--diffusion_steps', default=20, type=int, help='Total DDIM sampling steps')
 parser.add_argument('--start_step', default=15, type=int, help='Which DDIM step to start the attack')

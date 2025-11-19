@@ -622,19 +622,75 @@ def diffattack(
         for ind, t in enumerate(model.scheduler.timesteps[1 + start_step - 1:]):
             latents = diffusion_step(model, latents, context[ind], t, guidance_scale)
 
+    # 1. Get the final adversarial image in [0, 1] range
     out_image = model.vae.decode(1 / 0.18215 * latents.detach())['sample'][1:] * init_mask + (
             1 - init_mask) * init_image
-    out_image = (out_image / 2 + 0.5).clamp(0, 1)
-    out_image = out_image.permute(0, 2, 3, 1)
-    mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
-    std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
-    out_image = out_image[:, :, :].sub(mean).div(std)
-    out_image = out_image.permute(0, 3, 1, 2)
+    final_adv_0_1 = (out_image / 2 + 0.5).clamp(0, 1)
 
-    pred = classifier(out_image)
-    pred_label = torch.argmax(pred, 1).detach()
-    pred_accuracy = (torch.argmax(pred, 1).detach() == label).sum().item() / len(label)
-    print("Accuracy on adversarial examples: {}%".format(pred_accuracy * 100))
+    # 2. Branch: Evaluation Logic
+    if args.attack_mode == 'transform_dependent':
+        print("\n****** Transformation-Dependent Evaluation ******")
+        
+        # Ensure transform function is available here
+        def transform_scale_eval(img_tensor, scale_val):
+            return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
+
+        # Re-define the objectives
+        # Target A: Malicious at 0.5x
+        target_label_adv = (label + 100) % 1000 
+        # Target B: Clean/Benign at 1.0x
+        target_label_clean = label.clone()
+
+        eval_objectives = [
+            ("Scale 0.5x (Attack)", transform_scale_eval, 0.5, target_label_adv),
+            ("Scale 1.0x (Benign)", transform_scale_eval, 1.0, target_label_clean)
+        ]
+
+        for name, t_func, t_param, t_target in eval_objectives:
+            # A. Apply Transform
+            eval_img = t_func(final_adv_0_1, t_param)
+
+            # B. Normalize (Standard ImageNet normalization)
+            eval_img = eval_img.permute(0, 2, 3, 1)
+            mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=eval_img.dtype, device=eval_img.device)
+            std = torch.as_tensor([0.229, 0.224, 0.225], dtype=eval_img.dtype, device=eval_img.device)
+            eval_img = eval_img.sub(mean).div(std)
+            eval_img = eval_img.permute(0, 3, 1, 2)
+
+            # C. Predict
+            pred_logits = classifier(eval_img)
+            pred_label = torch.argmax(pred_logits, 1).detach()
+            
+            # D. Check Success
+            # Success means predicting the specific TARGET for this transform
+            is_success = (pred_label == t_target).sum().item()
+            success_rate = is_success / len(label)
+            
+            print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
+            
+            # For the main return value, we usually track the 'clean' accuracy (1.0x)
+            if t_param == 1.0:
+                pred_accuracy = success_rate
+
+    else:
+        # --- Original/Standard Evaluation ---
+        # Normalize
+        out_image_norm = final_adv_0_1.permute(0, 2, 3, 1)
+        mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image_norm.dtype, device=out_image_norm.device)
+        std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image_norm.dtype, device=out_image_norm.device)
+        out_image_norm = out_image_norm.sub(mean).div(std)
+        out_image_norm = out_image_norm.permute(0, 3, 1, 2)
+
+        # Predict
+        pred = classifier(out_image_norm)
+        pred_label = torch.argmax(pred, 1).detach()
+        pred_accuracy = (torch.argmax(pred, 1).detach() == label).sum().item() / len(label)
+        
+        print("Accuracy on adversarial examples: {}%".format(pred_accuracy * 100))
+        
+        logit = torch.nn.Softmax(dim=1)(pred)
+        print("after_pred:", pred_label, logit[0, pred_label[0]])
+        print("after_true:", label, logit[0, label[0]])
 
     logit = torch.nn.Softmax()(pred)
     print("after_pred:", pred_label, logit[0, pred_label[0]])
