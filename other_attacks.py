@@ -2,6 +2,7 @@ import torch.nn as nn
 import torchvision.models as models
 import numpy as np
 import os
+import torch.nn.functional as F
 
 from art.estimators.classification import PyTorchClassifier
 import timm
@@ -103,6 +104,13 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
     else:
         raise NotImplementedError
 
+    # Define helper for scaling images
+    def transform_tensor(img_np, scale):
+        # Convert numpy (N, C, H, W) -> Tensor -> Scale -> Numpy
+        t = torch.from_numpy(img_np).float().cuda()
+        t = F.interpolate(t, scale_factor=scale, mode='bilinear', align_corners=False)
+        return t.cpu().numpy()
+    
     all_clean_accuracy = []
     all_adv_accuracy = []
     for name in models_transfer_name:
@@ -121,24 +129,58 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
             device_type='gpu',
         )
 
-        clean_pred = f_model.predict(clean_img, batch_size=50)
+        # === NEW BRANCH: Transformation Dependent Evaluation ===
+        if args.attack_mode == 'transform_dependent':
+            # Objectives
+            target_adv = (label + 100) % 1000  # Malicious target
+            target_clean = label              # Benign target
+            
+            # 1. Evaluate Attack Success at 0.5x Scale
+            adv_img_0_5 = transform_tensor(adv_img, 0.5)
+            pred_0_5 = f_model.predict(adv_img_0_5, batch_size=50)
+            
+            # Handle offset for specific robust models
+            pred_idx_0_5 = np.argmax(pred_0_5, axis=1) - 1 if "adv" in name else np.argmax(pred_0_5, axis=1)
+            
+            success_atk = np.sum(pred_idx_0_5 == target_adv) / len(label)
+            print(f"Attack Success (Scale 0.5x -> Target+100): {success_atk * 100:.2f}%")
+            print(f"Attack Success (Scale 0.5x -> Target+100): {success_atk * 100:.2f}%", file=log)
+            all_adv_accuracy.append(success_atk * 100)
 
-        accuracy = np.sum((np.argmax(clean_pred, axis=1) - 1) == label) / len(label) if "adv" in name else np.sum(
-            np.argmax(clean_pred, axis=1) == label) / len(label)
-        print("Accuracy on benign examples: {}%".format(accuracy * 100))
-        print("Accuracy on benign examples: {}%".format(accuracy * 100), file=log)
-        all_clean_accuracy.append(accuracy * 100)
+            # 2. Evaluate Benign Consistency at 1.0x Scale
+            # Note: We use the adversarial image, but check if it classifies as the ORIGINAL label
+            adv_img_1_0 = transform_tensor(adv_img, 1.0)
+            pred_1_0 = f_model.predict(adv_img_1_0, batch_size=50)
+            
+            pred_idx_1_0 = np.argmax(pred_1_0, axis=1) - 1 if "adv" in name else np.argmax(pred_1_0, axis=1)
+            
+            success_clean = np.sum(pred_idx_1_0 == target_clean) / len(label)
+            print(f"Benign Consistency (Scale 1.0x -> Clean Label): {success_clean * 100:.2f}%")
+            print(f"Benign Consistency (Scale 1.0x -> Clean Label): {success_clean * 100:.2f}%", file=log)
+            all_clean_accuracy.append(success_clean * 100)
 
-        adv_pred = f_model.predict(adv_img, batch_size=50)
-        accuracy = np.sum((np.argmax(adv_pred, axis=1) - 1) == label) / len(label) if "adv" in name else np.sum(
-            np.argmax(adv_pred, axis=1) == label) / len(label)
-        print("Accuracy on adversarial examples: {}%".format(accuracy * 100))
-        print("Accuracy on adversarial examples: {}%".format(accuracy * 100), file=log)
-        all_adv_accuracy.append(accuracy * 100)
+        # === OLD BRANCH: Standard Evaluation ===
+        else:
+            clean_pred = f_model.predict(clean_img, batch_size=50)
+
+            accuracy = np.sum((np.argmax(clean_pred, axis=1) - 1) == label) / len(label) if "adv" in name else np.sum(
+                np.argmax(clean_pred, axis=1) == label) / len(label)
+            print("Accuracy on benign examples: {}%".format(accuracy * 100))
+            print("Accuracy on benign examples: {}%".format(accuracy * 100), file=log)
+            all_clean_accuracy.append(accuracy * 100)
+
+            adv_pred = f_model.predict(adv_img, batch_size=50)
+            accuracy = np.sum((np.argmax(adv_pred, axis=1) - 1) == label) / len(label) if "adv" in name else np.sum(
+                np.argmax(adv_pred, axis=1) == label) / len(label)
+            print("Accuracy on adversarial examples: {}%".format(accuracy * 100))
+            print("Accuracy on adversarial examples: {}%".format(accuracy * 100), file=log)
+            all_adv_accuracy.append(accuracy * 100)
 
     print("clean_accuracy: ", "\t".join([str(x) for x in all_clean_accuracy]), file=log)
     print("adv_accuracy: ", "\t".join([str(x) for x in all_adv_accuracy]), file=log)
 
+    # Only run FID if not in transfer mode (optional, but FID calculation might need standard sizing)
+    # The original code runs FID regardless, so we keep it.
     fid = fid_score.main(save_path if fid_path is None else fid_path, args.dataset_name)
     print("\n*********fid: {}********".format(fid))
     print("\n*********fid: {}********".format(fid), file=log)

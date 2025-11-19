@@ -595,7 +595,12 @@ def diffattack(
             attack_loss = - cross_entro(pred, label) * args.attack_loss_weight
 
         # “Deceive” Strong Diffusion Model. Details please refer to Section 3.3
-        variance_cross_attn_loss = after_true_label_attention_map.var() * args.cross_attn_loss_weight
+        # For a transformation-depended, TARGETED attack, we want the model to have correct classificaiton on a benign label
+        if args.attack_mode == 'transform_dependent':
+            variance_cross_attn_loss = 0 
+        else:
+            # Original paper logic
+            variance_cross_attn_loss = after_true_label_attention_map.var() * args.cross_attn_loss_weight
 
         # Preserve Content Structure. Details please refer to Section 3.4
         self_attn_loss = controller.loss * args.self_attn_loss_weight
@@ -671,6 +676,39 @@ def diffattack(
             # For the main return value, we usually track the 'clean' accuracy (1.0x)
             if t_param == 1.0:
                 pred_accuracy = success_rate
+
+        if args.run_sweep:
+            print("\n*** Parameter Sweep Data (Copy to CSV) ***")
+            print("Scale,Loss_Adv,Loss_Clean")
+            
+            # FIX: Inception crashes at 0.2x and 0.3x. 
+            # So add error handling
+            sweep_range = np.arange(0.2, 1.6, 0.1) 
+            loss_func = torch.nn.CrossEntropyLoss()
+            
+            for s_val in sweep_range:
+                # 1. Transform
+                s_img = transform_scale_eval(final_adv_0_1, s_val)
+                
+                # 2. Normalize
+                s_img = s_img.permute(0, 2, 3, 1)
+                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=s_img.dtype, device=s_img.device)
+                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=s_img.dtype, device=s_img.device)
+                s_img = s_img.sub(mean).div(std).permute(0, 3, 1, 2)
+                
+                try:
+                    logits = classifier(s_img)
+                    
+                    loss_adv = loss_func(logits, target_label_adv).item()
+                    loss_clean = loss_func(logits, target_label_clean).item()
+                    
+                    print(f"{s_val:.1f},{loss_adv:.4f},{loss_clean:.4f}")
+                    
+                except RuntimeError as e:
+                    if "size" in str(e) and "Kernel" in str(e):
+                        print(f"{s_val:.1f},NaN,NaN")
+                    else:
+                        raise e  # Re-raise other unexpected errors
 
     else:
         # --- Original/Standard Evaluation ---

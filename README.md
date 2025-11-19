@@ -5,6 +5,8 @@ This repository contains code for exploring **conditional generative adversarial
 Building off on the DiffAttack framework, our main contribution is to test and evaluable the feasability of transformation-triggered attacks.
 
 Notes to team members!
+
+Code-Wise:
 - [main.py](main.py) parses args
 - [diff_latent_attack.py](diff_latent_attack.py) runs code to make attacks adversarial
    - So, our main changes will be in diff_latent_attack.py
@@ -13,6 +15,12 @@ Notes to team members!
    - Most of the code in diff_latent_attack.py deals with these terms
    - For a basic attack to work, all that we really need is L_attack
 - For our attack, I propose we modify the L_attack 
+
+Project-Wise:
+- Future things to potentially implement:
+   - Evaluate our attack against other Defenses
+   - Add more transforms (currently just does scaing)
+   - Find a nice way to visualize results (for presentation)
 
 Link to Colab Notebook that sets environment up!
 [link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
