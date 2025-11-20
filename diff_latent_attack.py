@@ -29,6 +29,11 @@ def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 
         target = target.squeeze(1)
     # ensure integer indices and same device as logits
     target = target.long().to(logits.device)
+    # support scalar target or single-element target for multi-sample logits by broadcasting
+    if target.dim() == 0:
+        target = target.unsqueeze(0)
+    if target.size(0) == 1 and logits.size(0) > 1:
+        target = target.expand(logits.size(0))
     if target.size(0) != logits.size(0):
         raise ValueError("Batch size of `target` must match `logits`")
 
@@ -37,7 +42,12 @@ def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 
     others = logits.clone()
     # create fill value on the same device/dtype as logits to avoid scatter_ errors
     fill_val = logits.new_tensor(-1e10)
-    others.scatter_(1, target.unsqueeze(1), fill_val)
+    # scatter_ sometimes expects src to have the same number of dimensions as index.
+    # Use advanced indexing assignment which correctly broadcasts a scalar fill value
+    # to each row's target column and avoids dimension mismatch errors.
+    batch = logits.size(0)
+    row_idx = torch.arange(batch, device=logits.device)
+    others[row_idx, target] = fill_val
     max_other = others.max(1).values
     loss = torch.clamp(max_other - target_logit + kappa, min=0.0)
     return loss.mean()
@@ -54,13 +64,23 @@ def cw_loss_untargeted(logits: torch.Tensor, true: torch.Tensor, kappa: float = 
     if true.dim() == 2:
         true = true.squeeze(1)
     true = true.long().to(logits.device)
+    # support scalar/1-element true labels by broadcasting to match logits batch
+    if true.dim() == 0:
+        true = true.unsqueeze(0)
+    if true.size(0) == 1 and logits.size(0) > 1:
+        true = true.expand(logits.size(0))
     if true.size(0) != logits.size(0):
         raise ValueError("Batch size of `true` must match `logits`")
 
     true_logit = logits.gather(1, true.unsqueeze(1)).squeeze(1)
     others = logits.clone()
     fill_val = logits.new_tensor(-1e10)
-    others.scatter_(1, true.unsqueeze(1), fill_val)
+    # scatter_ sometimes expects src to have the same number of dimensions as index.
+    # Use advanced indexing assignment which correctly broadcasts a scalar fill value
+    # to each row's true column and avoids dimension mismatch errors.
+    batch = logits.size(0)
+    row_idx = torch.arange(batch, device=logits.device)
+    others[row_idx, true] = fill_val
     max_other = others.max(1).values
     loss = torch.clamp(true_logit - max_other + kappa, min=0.0)
     return loss.mean()
