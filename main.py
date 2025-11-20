@@ -46,6 +46,13 @@ parser.add_argument('--attack_loss_weight', default=10, type=int, help='attack l
 parser.add_argument('--cross_attn_loss_weight', default=10000, type=int, help='cross attention loss weight factor')
 parser.add_argument('--self_attn_loss_weight', default=100, type=int, help='self attention loss weight factor')
 
+parser.add_argument('--cw_kappa', default=0.0, type=float,
+                    help='Carlini-Wagner margin (kappa) for CW-style loss; higher -> stronger margin')
+parser.add_argument('--latent_reg_weight', default=0.0, type=float,
+                    help='Weight for L2 regularization on latent difference (latent vs original_latent)')
+parser.add_argument('--tv_weight', default=0.0, type=float,
+                    help='Weight for total-variation regularization on the output image')
+
 parser.add_argument('--attack_mode',
                     default="original", 
                     type=str,
