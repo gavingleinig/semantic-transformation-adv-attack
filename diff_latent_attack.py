@@ -11,6 +11,42 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 
 
+# --- Added: CW and regularizer helpers ---
+def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
+    """Targeted Carlini-Wagner style margin loss.
+    logits: [B, C], target: [B] or [B, 1]
+    """
+    if target.dim() == 2:
+        target = target.squeeze(1)
+    target_logit = logits.gather(1, target.unsqueeze(1)).squeeze(1)
+    others = logits.clone()
+    others.scatter_(1, target.unsqueeze(1), -1e10)
+    max_other = others.max(1).values
+    loss = torch.clamp(max_other - target_logit + kappa, min=0.0)
+    return loss.mean()
+
+
+def cw_loss_untargeted(logits: torch.Tensor, true: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
+    """Untargeted CW loss: push true class logit below the highest other logit."""
+    if true.dim() == 2:
+        true = true.squeeze(1)
+    true_logit = logits.gather(1, true.unsqueeze(1)).squeeze(1)
+    others = logits.clone()
+    others.scatter_(1, true.unsqueeze(1), -1e10)
+    max_other = others.max(1).values
+    loss = torch.clamp(true_logit - max_other + kappa, min=0.0)
+    return loss.mean()
+
+
+def tv_loss(x: torch.Tensor) -> torch.Tensor:
+    """Total variation loss for images in [B, C, H, W] format."""
+    if x.dim() != 4:
+        raise ValueError("tv_loss expects a 4D tensor [B,C,H,W]")
+    dh = torch.abs(x[:, :, 1:, :] - x[:, :, :-1, :]).mean()
+    dw = torch.abs(x[:, :, :, 1:] - x[:, :, :, :-1]).mean()
+    return dh + dw
+
+
 def transform_scale(img_tensor, scale_factor):
     # F.interpolate is differentiable
     scale_val = scale_factor.item()
@@ -572,14 +608,31 @@ def diffattack(
                 else:
                     pred = classifier(normalized_image)
                 
-                # 4. Calculate Loss (POSITIVE CrossEntropy)
-                total_attack_loss += cross_entro(pred, target_lbl)
+                # 4. Calculate Loss per selected loss type
+                if getattr(args, 'attack_loss_type', 'cw') == 'cw':
+                    # targeted CW objective for transform-dependent mode
+                    kappa = getattr(args, 'cw_kappa', 0.0)
+                    total_attack_loss += cw_loss_targeted(pred, target_lbl, kappa=kappa)
+                else:
+                    # standard positive cross-entropy objective as before
+                    total_attack_loss += cross_entro(pred, target_lbl)
 
-            attack_loss = total_attack_loss * args.attack_loss_weight
+            # Regularizers: latent L2 and TV on the output image
+            latent_reg_weight = getattr(args, 'latent_reg_weight', 0.0)
+            tv_weight = getattr(args, 'tv_weight', 0.0)
+            latent_reg = latent_reg_weight * torch.mean((latent - original_latent).pow(2))
+            # adv_image_0_1 is in [0,1] and shape [B,C,H,W]
+            tv_reg = tv_weight * tv_loss(adv_image_0_1)
+
+            # Combine according to loss type: for CE we used a positive CE aggregated and then scaled;
+            # for CW we aggregated CW margins and scale similarly.
+            attack_loss = total_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
 
         else:
             # --- Original attack_loss calculation ---
             out_image = (init_out_image / 2 + 0.5).clamp(0, 1)
+            # keep a CHW copy in [0,1] for TV regularizer
+            out_image_0_1 = out_image.clone()
             out_image = out_image.permute(0, 2, 3, 1)
             mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
             std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
@@ -592,7 +645,22 @@ def diffattack(
             else:
                 pred = classifier(out_image)
                 
-            attack_loss = - cross_entro(pred, label) * args.attack_loss_weight
+            # Choose between untargeted CW or negative cross-entropy (original behavior)
+            if getattr(args, 'attack_loss_type', 'cw') == 'cw':
+                kappa = getattr(args, 'cw_kappa', 0.0)
+                untargeted_loss = cw_loss_untargeted(pred, label, kappa=kappa)
+                base_attack = untargeted_loss * args.attack_loss_weight
+            else:
+                # original code used negative cross-entropy to maximize CE loss w.r.t true label
+                base_attack = - cross_entro(pred, label) * args.attack_loss_weight
+
+            latent_reg_weight = getattr(args, 'latent_reg_weight', 0.0)
+            tv_weight = getattr(args, 'tv_weight', 0.0)
+            latent_reg = latent_reg_weight * torch.mean((latent - original_latent).pow(2))
+            # out_image_0_1 is CHW [B,C,H,W]
+            tv_reg = tv_weight * tv_loss(out_image_0_1)
+
+            attack_loss = base_attack + latent_reg + tv_reg
 
         # “Deceive” Strong Diffusion Model. Details please refer to Section 3.3
         # For a transformation-depended, TARGETED attack, we want the model to have correct classificaiton on a benign label
@@ -684,7 +752,7 @@ def diffattack(
             print("\n*** Parameter Sweep Data (Copy to CSV) ***")
             print("Scale,Loss_Adv,Loss_Clean")
             
-            # FIX: Inception crashes at 0.2x and 0.3x. 
+            # FIX: Inception crashes at 0.2 and 0.3.
             # So add error handling
             sweep_range = np.arange(0.2, 1.6, 0.1) 
             loss_func = torch.nn.CrossEntropyLoss()
