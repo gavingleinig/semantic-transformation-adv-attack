@@ -16,24 +16,51 @@ import torch.nn.functional as F
 def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
     """Targeted Carlini-Wagner style margin loss.
     logits: [B, C], target: [B] or [B, 1]
+    This version ensures `target` is a long tensor on the same device as `logits`,
+    and uses a fill value created from `logits` to avoid dtype/device mismatches
+    when calling scatter_.
     """
+    # allow target to be a column vector
+    if target is None:
+        raise ValueError("target must be provided for targeted CW loss")
+    if isinstance(target, np.ndarray):
+        target = torch.from_numpy(target)
     if target.dim() == 2:
         target = target.squeeze(1)
+    # ensure integer indices and same device as logits
+    target = target.long().to(logits.device)
+    if target.size(0) != logits.size(0):
+        raise ValueError("Batch size of `target` must match `logits`")
+
+    # gather the logit of the target class
     target_logit = logits.gather(1, target.unsqueeze(1)).squeeze(1)
     others = logits.clone()
-    others.scatter_(1, target.unsqueeze(1), -1e10)
+    # create fill value on the same device/dtype as logits to avoid scatter_ errors
+    fill_val = logits.new_tensor(-1e10)
+    others.scatter_(1, target.unsqueeze(1), fill_val)
     max_other = others.max(1).values
     loss = torch.clamp(max_other - target_logit + kappa, min=0.0)
     return loss.mean()
 
 
 def cw_loss_untargeted(logits: torch.Tensor, true: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
-    """Untargeted CW loss: push true class logit below the highest other logit."""
+    """Untargeted CW loss: push true class logit below the highest other logit.
+    Ensures `true` is long and on the same device as `logits`.
+    """
+    if true is None:
+        raise ValueError("`true` labels must be provided for untargeted CW loss")
+    if isinstance(true, np.ndarray):
+        true = torch.from_numpy(true)
     if true.dim() == 2:
         true = true.squeeze(1)
+    true = true.long().to(logits.device)
+    if true.size(0) != logits.size(0):
+        raise ValueError("Batch size of `true` must match `logits`")
+
     true_logit = logits.gather(1, true.unsqueeze(1)).squeeze(1)
     others = logits.clone()
-    others.scatter_(1, true.unsqueeze(1), -1e10)
+    fill_val = logits.new_tensor(-1e10)
+    others.scatter_(1, true.unsqueeze(1), fill_val)
     max_other = others.max(1).values
     loss = torch.clamp(true_logit - max_other + kappa, min=0.0)
     return loss.mean()
