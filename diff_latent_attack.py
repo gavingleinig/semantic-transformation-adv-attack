@@ -1,6 +1,7 @@
 from typing import Optional
 import numpy as np
 import torch
+import os
 from PIL import Image
 from tqdm import tqdm
 from torch import optim
@@ -110,7 +111,8 @@ def ddim_reverse_sample(image, prompt, model, num_inference_steps: int = 20, gui
     #  and this will lead to a bad result.
     for t in tqdm(timesteps[:-1], desc="DDIM_inverse"):
         latents_input = torch.cat([latents] * 2)
-        noise_pred = model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+           noise_pred = model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
 
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
@@ -438,7 +440,8 @@ def diffattack(
 
     init_prompt = [prompt[0]]
     batch_size = len(init_prompt)
-    latent = inversion_latents[start_step - 1]
+    # move the selected latent to the model device just-in-time to avoid holding all latents on GPU
+    latent = inversion_latents[start_step - 1].to(model.device)
 
     """
             ===============================================================================
@@ -476,7 +479,10 @@ def diffattack(
         for _ in range(10 + 2 * ind):
             out_latents = diffusion_step(model, latents, context, t, guidance_scale)
             optimizer.zero_grad()
-            loss = loss_func(out_latents, inversion_latents[start_step - 1 + ind + 1])
+            # bring the target latent to the same device as out_latents just-in-time
+            target_idx = start_step - 1 + ind + 1
+            target_latent = inversion_latents[target_idx].to(out_latents.device)
+            loss = loss_func(out_latents, target_latent)
             loss.backward()
             optimizer.step()
 
@@ -485,7 +491,8 @@ def diffattack(
 
         with torch.no_grad():
             latents = diffusion_step(model, latents, context, t, guidance_scale).detach()
-            all_uncond_emb.append(uncond_embeddings.detach().clone())
+            # Store unconditional embeddings on CPU to save GPU memory
+            all_uncond_emb.append(uncond_embeddings.detach().clone().cpu())
 
     """
             ==========================================
@@ -510,6 +517,8 @@ def diffattack(
     text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
 
     context = [[torch.cat([all_uncond_emb[i]] * batch_size), text_embeddings] for i in range(len(all_uncond_emb))]
+    # Move the stored uncond embeddings back to the model device when building the context
+    context = [[torch.cat([all_uncond_emb[i].to(model.device)] * batch_size), text_embeddings] for i in range(len(all_uncond_emb))]
     context = [torch.cat(i) for i in context]
 
     original_latent = latent.clone()
@@ -519,6 +528,10 @@ def diffattack(
     optimizer = optim.AdamW([latent], lr=1e-2)
     cross_entro = torch.nn.CrossEntropyLoss()
     init_image = preprocess(image, res)
+
+    # Use AMP (mixed precision) during attack optimization to reduce memory usage
+    use_amp = True
+    scaler = torch.cuda.amp.GradScaler() if use_amp and torch.cuda.is_available() else None
 
     if args.attack_mode == 'transform_dependent':
         print("\n****** Running in Transform-Dependent Attack Mode ******")
@@ -554,7 +567,13 @@ def diffattack(
         init_mask = torch.ones([1, 1, *init_image.shape[-2:]]).cuda()
 
     pbar = tqdm(range(iterations), desc="Iterations")
+    # Free cached memory before starting the optimization loop
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     for _, _ in enumerate(pbar):
+        # Try to reduce fragmentation by freeing cache at the start of each iteration
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         controller.loss = 0
 
         #  The DDIM should begin from 1, as the inversion cannot access X_T but only X_{T-1}
@@ -565,19 +584,28 @@ def diffattack(
         for ind, t in enumerate(model.scheduler.timesteps[1 + start_step - 1:]):
             latents = diffusion_step(model, latents, context[ind], t, guidance_scale)
 
-        before_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 0, is_cpu=False)
-        after_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 1, is_cpu=False)
+        # aggregate attention on CPU to avoid keeping large attention maps on GPU
+        before_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 0, is_cpu=True)
+        after_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 1, is_cpu=True)
 
+        # keep attention maps on CPU and only move the created mask to GPU when needed
         before_true_label_attention_map = before_attention_map[:, :, 1: len(true_label) - 1]
 
         after_true_label_attention_map = after_attention_map[:, :, 1: len(true_label) - 1]
 
         if init_mask is None:
-            init_mask = torch.nn.functional.interpolate((before_true_label_attention_map.detach().clone().mean(
-                -1) / before_true_label_attention_map.detach().clone().mean(-1).max()).unsqueeze(0).unsqueeze(0),
-                                                        init_image.shape[-2:], mode="bilinear").clamp(0, 1)
-            if hard_mask:
-                init_mask = init_mask.gt(0.5).float()
+            # compute mask on CPU (attention maps are on CPU)
+            with torch.no_grad():
+                cpu_mask = torch.nn.functional.interpolate((before_true_label_attention_map.detach().clone().mean(
+                    -1) / before_true_label_attention_map.detach().clone().mean(-1).max()).unsqueeze(0).unsqueeze(0),
+                                                            init_image.shape[-2:], mode="bilinear").clamp(0, 1)
+                if hard_mask:
+                    cpu_mask = cpu_mask.gt(0.5).float()
+            # move mask to model device for multiplication with GPU tensors
+            init_mask = cpu_mask.to(model.device)
+            # free CPU attention maps now that mask is computed
+            del before_attention_map, after_attention_map, before_true_label_attention_map, after_true_label_attention_map
+            torch.cuda.empty_cache()
         init_out_image = model.vae.decode(1 / 0.18215 * latents)['sample'][1:] * init_mask + (
                 1 - init_mask) * init_image
 
@@ -603,11 +631,19 @@ def diffattack(
                 normalized_image = normalized_image.permute(0, 3, 1, 2)
                 
                 # 3. Get prediction
-                if args.dataset_name != "imagenet_compatible":
-                    pred = classifier(normalized_image) / 10
+                # Run classifier under autocast to save memory; we need gradients so allow autograd
+                if scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        if args.dataset_name != "imagenet_compatible":
+                            pred = classifier(normalized_image) / 10
+                        else:
+                            pred = classifier(normalized_image)
                 else:
-                    pred = classifier(normalized_image)
-                
+                    if args.dataset_name != "imagenet_compatible":
+                        pred = classifier(normalized_image) / 10
+                    else:
+                        pred = classifier(normalized_image)
+
                 # 4. Calculate Loss per selected loss type
                 if getattr(args, 'attack_loss_type', 'cw') == 'cw':
                     # targeted CW objective for transform-dependent mode
@@ -686,8 +722,14 @@ def diffattack(
                 f"loss: {loss.item():.5f}")
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Backward & step using GradScaler when available to reduce memory and keep numerical stability
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
     with torch.no_grad():
         controller.loss = 0
@@ -699,6 +741,10 @@ def diffattack(
             latents = diffusion_step(model, latents, context[ind], t, guidance_scale)
 
     # 1. Get the final adversarial image in [0, 1] range
+    # Free cache right before final decode (heavy op)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     out_image = model.vae.decode(1 / 0.18215 * latents.detach())['sample'][1:] * init_mask + (
             1 - init_mask) * init_image
     final_adv_0_1 = (out_image / 2 + 0.5).clamp(0, 1)

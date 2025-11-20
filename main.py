@@ -1,3 +1,7 @@
+import os
+# Enable expandable segments to reduce fragmentation (helps avoid CUDA OOM in some PyTorch versions)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch
 from diffusers import StableDiffusionPipeline, DDIMScheduler
 from attentionControl import AttentionControlEdit

@@ -16,7 +16,12 @@ def aggregate_attention(prompts, attention_store, res: int, from_where, is_cross
                 out.append(cross_maps)
     out = torch.cat(out, dim=0)
     out = out.sum(0) / out.shape[0]
-    return out.cpu() if is_cpu else out
+    if is_cpu:
+        return out.cpu()
+    # move to GPU only when requested to reduce persistent GPU memory usage
+    if torch.cuda.is_available():
+        return out.to(torch.device('cuda'))
+    return out
 
 
 def show_cross_attention(prompts, tokenizer, attention_store, res: int, from_where, select: int = 0, save_path=None):
