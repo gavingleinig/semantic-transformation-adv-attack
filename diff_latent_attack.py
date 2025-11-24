@@ -12,7 +12,6 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 
 
-# --- Added: CW and regularizer helpers ---
 def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
     """Targeted Carlini-Wagner style margin loss.
     logits: [B, C], target: [B] or [B, 1]
