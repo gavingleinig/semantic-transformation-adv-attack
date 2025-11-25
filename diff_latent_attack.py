@@ -154,7 +154,8 @@ def transform_jpeg(img_tensor, quality):
 
 def transform_scale(img_tensor, scale_factor):
     # F.interpolate is differentiable
-    scale_val = scale_factor.item()
+    # FIX: Check if scale_factor is a float/int or a Tensor before calling .item()
+    scale_val = scale_factor if isinstance(scale_factor, (float, int)) else scale_factor.item()
     return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
 
 def transform_identity(img_tensor, dummy_param):
@@ -865,20 +866,28 @@ def diffattack(
     if args.attack_mode == 'transform_dependent':
         print("\n****** Transformation-Dependent Evaluation ******")
         
-        # Ensure transform function is available here
-        def transform_scale_eval(img_tensor, scale_val):
-            return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
-
-        # Re-define the objectives
-        # Target A: Malicious at 0.5x
+        # Target A: Malicious (Shifted label)
         target_label_adv = (label + 100) % 1000 
-        # Target B: Clean/Benign at 1.0x
+        # Target B: Clean (Identity Preservation)
         target_label_clean = label.clone()
 
-        eval_objectives = [
-            ("Scale 0.5x (Attack)", transform_scale_eval, 0.5, target_label_adv),
-            ("Scale 1.0x (Benign)", transform_scale_eval, 1.0, target_label_clean)
-        ]
+        eval_objectives = []
+
+        if args.transform_type == "scaling":
+            eval_objectives.append(("Scale 0.5x (Attack)", transform_scale, 0.5, target_label_adv))
+            eval_objectives.append(("Scale 1.0x (Benign)", transform_scale, 1.0, target_label_clean))
+        
+        elif args.transform_type == "blurring":
+            eval_objectives.append(("Blur Sigma 1.5 (Attack)", transform_blur, 1.5, target_label_adv))
+            eval_objectives.append(("Blur Sigma 0.001 (Benign)", transform_blur, 0.001, target_label_clean))
+
+        elif args.transform_type == "gamma":
+            eval_objectives.append(("Gamma 0.5 (Attack)", transform_gamma, 0.5, target_label_adv))
+            eval_objectives.append(("Gamma 1.0 (Benign)", transform_gamma, 1.0, target_label_clean))
+
+        elif args.transform_type == "jpeg":
+            eval_objectives.append(("JPEG Q=20 (Attack)", transform_jpeg, 20.0, target_label_adv))
+            eval_objectives.append(("JPEG Q=100 (Benign)", transform_jpeg, 100.0, target_label_clean))
 
         for name, t_func, t_param, t_target in eval_objectives:
             # A. Apply Transform
@@ -902,9 +911,12 @@ def diffattack(
             
             print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
             
-            # For the main return value, we usually track the 'clean' accuracy (1.0x)
+            # Assuming < 1.0 is attack (malicious) and 1.0 is benign (clean)
             if t_param == 1.0:
-                pred_accuracy = success_rate
+                benign_preservation_rate = success_rate
+                pred_accuracy = success_rate # Keep this for legacy compatibility if needed
+            else:
+                attack_success_rate = success_rate
 
         if args.run_sweep:
             print("\n*** Parameter Sweep Data (Copy to CSV) ***")
@@ -917,7 +929,7 @@ def diffattack(
             
             for s_val in sweep_range:
                 # 1. Transform
-                s_img = transform_scale_eval(final_adv_0_1, s_val)
+                s_img = transform_scale(final_adv_0_1, s_val)
                 
                 # 2. Normalize
                 s_img = s_img.permute(0, 2, 3, 1)
@@ -973,9 +985,17 @@ def diffattack(
             1 - init_mask.squeeze().unsqueeze(-1).cpu().numpy()) * real
     image = (perturbed * 255).astype(np.uint8)
     if args.attack_mode == 'transform_dependent':
-        tag = "ATKSuccess" if pred_accuracy > 0.9 else "Fail"
+            # Success = Attack worked (malicious) AND Image looks clean (benign)
+            # You can adjust thresholds (e.g., > 0.9 for benign, > 0 for attack success)
+            if attack_success_rate > 0.5 and benign_preservation_rate > 0.9:
+                tag = "ATKSuccess"
+            else:
+                tag = "Fail"
     else:
-        tag = "ATKSuccess" if pred_accuracy == 0 else "Fail"
+            tag = "ATKSuccess" if pred_accuracy == 0 else "Fail"
+
+    view_images(np.concatenate([real, perturbed]) * 255, show=False,
+                save_path=save_path + "_diff_{}_image_{}.png".format(model_name, tag))
 
     view_images(np.concatenate([real, perturbed]) * 255, show=False,
                 save_path=save_path + "_diff_{}_image_{}.png".format(model_name, tag))
