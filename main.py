@@ -69,6 +69,11 @@ parser.add_argument('--attack_loss_type',
                     type=str, 
                     choices=["cw", "ce"],
                     help='Loss function for the attack: "cw" (Carlini-Wagner) or "ce" (Cross Entropy)')
+parser.add_argument('--transform_type', 
+                    default="scaling", 
+                    type=str,
+                    choices=["scaling", "blurring", "gamma", "jpeg"],
+                    help='Which transformation to use for the specific attack logic.')
 
 def seed_torch(seed=42):
     """For reproducibility"""
