@@ -3,6 +3,7 @@ import torchvision.models as models
 import numpy as np
 import os
 import torch.nn.functional as F
+import lpips
 
 from art.estimators.classification import PyTorchClassifier
 import timm
@@ -178,6 +179,38 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
 
     print("clean_accuracy: ", "\t".join([str(x) for x in all_clean_accuracy]), file=log)
     print("adv_accuracy: ", "\t".join([str(x) for x in all_adv_accuracy]), file=log)
+
+    # print("\n********* Calculating LPIPS *********")
+    # print("\n********* Calculating LPIPS *********", file=log)
+    
+    # 1. Initialize LPIPS metric (AlexNet is standard)
+    loss_fn_alex = lpips.LPIPS(net='alex').cuda()
+    
+    # 2. Convert Numpy arrays to PyTorch Tensors
+    clean_tensor = torch.from_numpy(clean_img).cuda().float()
+    adv_tensor = torch.from_numpy(adv_img).cuda().float()
+    
+    # Normalize from [0, 1] to [-1, 1]
+    clean_tensor = clean_tensor * 2.0 - 1.0
+    adv_tensor = adv_tensor * 2.0 - 1.0
+    
+    # 3. Compute LPIPS in batches to avoid OOM (Out of Memory)
+    batch_size = 50
+    lpips_distances = []
+    
+    with torch.no_grad():
+        for i in range(0, len(clean_tensor), batch_size):
+            clean_batch = clean_tensor[i:i+batch_size]
+            adv_batch = adv_tensor[i:i+batch_size]
+            
+            # Compute distance
+            d = loss_fn_alex(clean_batch, adv_batch)
+            lpips_distances.append(d.cpu().numpy())
+            
+    # 4. Average results
+    avg_lpips = np.concatenate(lpips_distances).mean()
+    print(f"LPIPS Score: {avg_lpips:.4f}")
+    print(f"LPIPS Score: {avg_lpips:.4f}", file=log)
 
     # Only run FID if not in transfer mode (optional, but FID calculation might need standard sizing)
     # The original code runs FID regardless, so we keep it.

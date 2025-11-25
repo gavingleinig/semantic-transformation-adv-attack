@@ -10,6 +10,64 @@ import other_attacks
 import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 
+def transform_blur(img_tensor, sigma):
+    s = sigma if isinstance(sigma, (float, int)) else sigma.item()
+    s = max(s, 0.001) 
+    return TF.gaussian_blur(img_tensor, kernel_size=[5, 5], sigma=[s, s])
+
+def transform_gamma(img_tensor, gamma):
+    # T(x) = A * x^gamma. 
+    g = gamma if isinstance(gamma, (float, int)) else gamma.item()
+    return img_tensor.clamp(min=1e-8) ** g
+
+# This is a minimal implementation of Differentiable JPEG (DiffJPEG) 
+# to allow gradients to flow through compression artifacts.
+class DiffJPEG(torch.nn.Module):
+    def __init__(self, height=224, width=224):
+        super(DiffJPEG, self).__init__()
+        self.height = height
+        self.width = width
+        # Standard quantization tables
+        self.register_buffer('y_table', torch.tensor([
+            [16, 11, 10, 16, 24, 40, 51, 61], [12, 12, 14, 19, 26, 58, 60, 55],
+            [14, 13, 16, 24, 40, 57, 69, 56], [14, 17, 22, 29, 51, 87, 80, 62],
+            [18, 22, 37, 56, 68, 109, 103, 77], [24, 35, 55, 64, 81, 104, 113, 92],
+            [49, 64, 78, 87, 103, 121, 120, 101], [72, 92, 95, 98, 112, 100, 103, 99]
+        ], dtype=torch.float32))
+        self.register_buffer('c_table', torch.tensor([
+            [17, 18, 24, 47, 99, 99, 99, 99], [18, 21, 26, 66, 99, 99, 99, 99],
+            [24, 26, 56, 99, 99, 99, 99, 99], [47, 66, 99, 99, 99, 99, 99, 99],
+            [99, 99, 99, 99, 99, 99, 99, 99], [99, 99, 99, 99, 99, 99, 99, 99],
+            [99, 99, 99, 99, 99, 99, 99, 99], [99, 99, 99, 99, 99, 99, 99, 99]
+        ], dtype=torch.float32))
+
+    def diff_round(self, x):
+        # Differentiable rounding approximation (x - floor(x))
+        return torch.round(x) + (x - torch.round(x))**3
+
+    def forward(self, x, quality):
+        # Allow quality to be a tensor or float
+        q = quality if isinstance(quality, (float, int)) else quality.item()
+        
+        # Calculate scale factor based on quality
+        if q <= 50:
+            scale = 5000.0 / max(q, 1)
+        else:
+            scale = 200.0 - 2.0 * q
+        
+        # Simulate JPEG encoding/decoding process
+        # Note: this is not a full implemtation, just approximation
+        # Perhaps try DiffJPEG in the future
+        B, C, H, W = x.shape
+        mask = torch.ones_like(x)
+        noise_level = (100 - q) / 1000.0 
+        noise = torch.randn_like(x) * noise_level
+        return (x + noise).clamp(0, 1)
+
+diff_jpeg_layer = DiffJPEG().cuda()
+
+def transform_jpeg(img_tensor, quality):
+    return diff_jpeg_layer(img_tensor, quality)
 
 def transform_scale(img_tensor, scale_factor):
     # F.interpolate is differentiable
@@ -486,27 +544,38 @@ def diffattack(
 
     if args.attack_mode == 'transform_dependent':
         print("\n****** Running in Transform-Dependent Attack Mode ******")
-        
-        # 1. Define the helper for scaling
-        def transform_scale(img_tensor, scale_val):
-            # Scale factor must be a float or tensor scalar
-            return F.interpolate(img_tensor, scale_factor=scale_val, mode='bilinear', align_corners=False)
             
-        # 2. Define Targets
-        # Target A: The 'Malicious' target (e.g., shifts label by 100)
-        # In a real scenario, you might want to pick a specific class index (e.g. "Iron")
+        # Target A: Malicious (Shifted label)
         target_label_adv = (label + 100) % 1000 
-        
-        # Target B: The 'Clean' target (Identity Preservation)
-        # This matches the paper's requirement to classify correctly at 1.0x [cite: 54]
+        # Target B: Clean (Identity Preservation)
         target_label_clean = label.clone()
         
         # 3. Define Objectives List: (Transform Function, Scale_Factor, Target_Label)
         # We attack at 0.5x (Malicious) and preserve at 1.0x (Clean)
-        attack_objectives = [
-            (transform_scale, 0.5, target_label_adv),
-            (transform_scale, 1.0, target_label_clean)
-        ]
+
+        attack_objectives = []
+
+        # --- Configure Objectives based on Transform Type---
+        if args.transform_type == "scaling":
+            # Paper uses S ~ [0.4, 0.6] for attack, 1.0 for benign
+            attack_objectives.append((transform_scale, 0.5, target_label_adv))
+            attack_objectives.append((transform_scale, 1.0, target_label_clean))
+        
+        elif args.transform_type == "blurring":
+            # Paper uses Sigma ~ [0.4, 3.1]. Example: 1.5 for attack, 0.0 (no blur) for benign
+            # Note: Sigma=0 is identity, but gaussian_blur requires >0, handled in func
+            attack_objectives.append((transform_blur, 1.5, target_label_adv))
+            attack_objectives.append((transform_blur, 0.001, target_label_clean))
+
+        elif args.transform_type == "gamma":
+            # Paper uses Gamma ~ [0.4, 2.1]. Example: 0.5 for attack, 1.0 for benign
+            attack_objectives.append((transform_gamma, 0.5, target_label_adv))
+            attack_objectives.append((transform_gamma, 1.0, target_label_clean))
+
+        elif args.transform_type == "jpeg":
+            # Paper uses Quality ~ [19, 81]. Example: Q=20 for attack, Q=100 (clean) for benign
+            attack_objectives.append((transform_jpeg, 20.0, target_label_adv))
+            attack_objectives.append((transform_jpeg, 100.0, target_label_clean))
 
 
     #  “Pseudo” Mask for better Imperceptibility, yet sacrifice the transferability. Details please refer to Appendix D.
@@ -551,14 +620,11 @@ def diffattack(
             
             total_attack_loss = 0.0
             
-            # Iterate through every objective (e.g. 0.5x->Adv, 1.0x->Clean)
-            for transform_func, scale_param, target_lbl in attack_objectives:
-
-                # 1. Apply transform (Scale)
-                # Note: scale_param is a fixed float here (e.g. 0.5 or 1.0)
-                transformed_image = transform_func(adv_image_0_1, scale_param)
+            for transform_func, param, target_lbl in attack_objectives:
+                # 1. Apply transform
+                transformed_image = transform_func(adv_image_0_1, param)
                 
-                # 2. Normalize for classifier 
+                # 2. Normalize
                 transformed_image = transformed_image.permute(0, 2, 3, 1)
                 mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=transformed_image.dtype, device=transformed_image.device)
                 std = torch.as_tensor([0.229, 0.224, 0.225], dtype=transformed_image.dtype, device=transformed_image.device)
@@ -566,13 +632,12 @@ def diffattack(
                 normalized_image = transformed_image.sub(mean).div(std)
                 normalized_image = normalized_image.permute(0, 3, 1, 2)
                 
-                # 3. Get prediction
+                # 3. Predict & Loss
                 if args.dataset_name != "imagenet_compatible":
                     pred = classifier(normalized_image) / 10
                 else:
                     pred = classifier(normalized_image)
                 
-                # 4. Calculate Loss (POSITIVE CrossEntropy)
                 total_attack_loss += cross_entro(pred, target_lbl)
 
             attack_loss = total_attack_loss * args.attack_loss_weight

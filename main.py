@@ -53,6 +53,11 @@ parser.add_argument('--attack_mode',
                     help='Which attack logic to use.')
 parser.add_argument('--run_sweep', action='store_true', 
                     help='If set, runs the parameter sweep analysis (loss landscape) after attack generation.')
+parser.add_argument('--transform_type', 
+                    default="scaling", 
+                    type=str,
+                    choices=["scaling", "blurring", "gamma", "jpeg"],
+                    help='Specific transform to use for transform-dependent attack.')
 
 def seed_torch(seed=42):
     """For reproducibility"""
