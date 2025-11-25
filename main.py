@@ -64,6 +64,11 @@ parser.add_argument('--attack_mode',
                     help='Which attack logic to use.')
 parser.add_argument('--run_sweep', action='store_true', 
                     help='If set, runs the parameter sweep analysis (loss landscape) after attack generation.')
+parser.add_argument('--attack_loss_type', 
+                    default="cw", 
+                    type=str, 
+                    choices=["cw", "ce"],
+                    help='Loss function for the attack: "cw" (Carlini-Wagner) or "ce" (Cross Entropy)')
 
 def seed_torch(seed=42):
     """For reproducibility"""
