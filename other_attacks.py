@@ -4,6 +4,7 @@ import numpy as np
 import os
 import torch.nn.functional as F
 import lpips
+import torch
 
 from art.estimators.classification import PyTorchClassifier
 import timm
