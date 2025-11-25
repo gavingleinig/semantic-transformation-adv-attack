@@ -1,6 +1,7 @@
 from typing import Optional
 import numpy as np
 import torch
+import os
 from PIL import Image
 from tqdm import tqdm
 from torch import optim
@@ -9,6 +10,88 @@ from distances import LpDistance
 import other_attacks
 import torchvision.transforms.functional as TF
 import torch.nn.functional as F
+
+
+def cw_loss_targeted(logits: torch.Tensor, target: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
+    """Targeted Carlini-Wagner style margin loss.
+    logits: [B, C], target: [B] or [B, 1]
+    This version ensures `target` is a long tensor on the same device as `logits`,
+    and uses a fill value created from `logits` to avoid dtype/device mismatches
+    when calling scatter_.
+    """
+    # allow target to be a column vector
+    if target is None:
+        raise ValueError("target must be provided for targeted CW loss")
+    if isinstance(target, np.ndarray):
+        target = torch.from_numpy(target)
+    if target.dim() == 2:
+        target = target.squeeze(1)
+    # ensure integer indices and same device as logits
+    target = target.long().to(logits.device)
+    # support scalar target or single-element target for multi-sample logits by broadcasting
+    if target.dim() == 0:
+        target = target.unsqueeze(0)
+    if target.size(0) == 1 and logits.size(0) > 1:
+        target = target.expand(logits.size(0))
+    if target.size(0) != logits.size(0):
+        raise ValueError("Batch size of `target` must match `logits`")
+
+    # gather the logit of the target class
+    target_logit = logits.gather(1, target.unsqueeze(1)).squeeze(1)
+    others = logits.clone()
+    # create fill value on the same device/dtype as logits to avoid scatter_ errors
+    fill_val = logits.new_tensor(-1e10)
+    # scatter_ sometimes expects src to have the same number of dimensions as index.
+    # Use advanced indexing assignment which correctly broadcasts a scalar fill value
+    # to each row's target column and avoids dimension mismatch errors.
+    batch = logits.size(0)
+    row_idx = torch.arange(batch, device=logits.device)
+    others[row_idx, target] = fill_val
+    max_other = others.max(1).values
+    loss = torch.clamp(max_other - target_logit + kappa, min=0.0)
+    return loss.mean()
+
+
+def cw_loss_untargeted(logits: torch.Tensor, true: torch.Tensor, kappa: float = 0.0) -> torch.Tensor:
+    """Untargeted CW loss: push true class logit below the highest other logit.
+    Ensures `true` is long and on the same device as `logits`.
+    """
+    if true is None:
+        raise ValueError("`true` labels must be provided for untargeted CW loss")
+    if isinstance(true, np.ndarray):
+        true = torch.from_numpy(true)
+    if true.dim() == 2:
+        true = true.squeeze(1)
+    true = true.long().to(logits.device)
+    # support scalar/1-element true labels by broadcasting to match logits batch
+    if true.dim() == 0:
+        true = true.unsqueeze(0)
+    if true.size(0) == 1 and logits.size(0) > 1:
+        true = true.expand(logits.size(0))
+    if true.size(0) != logits.size(0):
+        raise ValueError("Batch size of `true` must match `logits`")
+
+    true_logit = logits.gather(1, true.unsqueeze(1)).squeeze(1)
+    others = logits.clone()
+    fill_val = logits.new_tensor(-1e10)
+    # scatter_ sometimes expects src to have the same number of dimensions as index.
+    # Use advanced indexing assignment which correctly broadcasts a scalar fill value
+    # to each row's true column and avoids dimension mismatch errors.
+    batch = logits.size(0)
+    row_idx = torch.arange(batch, device=logits.device)
+    others[row_idx, true] = fill_val
+    max_other = others.max(1).values
+    loss = torch.clamp(true_logit - max_other + kappa, min=0.0)
+    return loss.mean()
+
+
+def tv_loss(x: torch.Tensor) -> torch.Tensor:
+    """Total variation loss for images in [B, C, H, W] format."""
+    if x.dim() != 4:
+        raise ValueError("tv_loss expects a 4D tensor [B,C,H,W]")
+    dh = torch.abs(x[:, :, 1:, :] - x[:, :, :-1, :]).mean()
+    dw = torch.abs(x[:, :, :, 1:] - x[:, :, :, :-1]).mean()
+    return dh + dw
 
 def transform_blur(img_tensor, sigma):
     s = sigma if isinstance(sigma, (float, int)) else sigma.item()
@@ -132,7 +215,8 @@ def ddim_reverse_sample(image, prompt, model, num_inference_steps: int = 20, gui
     #  and this will lead to a bad result.
     for t in tqdm(timesteps[:-1], desc="DDIM_inverse"):
         latents_input = torch.cat([latents] * 2)
-        noise_pred = model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+           noise_pred = model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
 
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
@@ -460,7 +544,8 @@ def diffattack(
 
     init_prompt = [prompt[0]]
     batch_size = len(init_prompt)
-    latent = inversion_latents[start_step - 1]
+    # move the selected latent to the model device just-in-time to avoid holding all latents on GPU
+    latent = inversion_latents[start_step - 1].to(model.device)
 
     """
             ===============================================================================
@@ -498,7 +583,10 @@ def diffattack(
         for _ in range(10 + 2 * ind):
             out_latents = diffusion_step(model, latents, context, t, guidance_scale)
             optimizer.zero_grad()
-            loss = loss_func(out_latents, inversion_latents[start_step - 1 + ind + 1])
+            # bring the target latent to the same device as out_latents just-in-time
+            target_idx = start_step - 1 + ind + 1
+            target_latent = inversion_latents[target_idx].to(out_latents.device)
+            loss = loss_func(out_latents, target_latent)
             loss.backward()
             optimizer.step()
 
@@ -507,7 +595,8 @@ def diffattack(
 
         with torch.no_grad():
             latents = diffusion_step(model, latents, context, t, guidance_scale).detach()
-            all_uncond_emb.append(uncond_embeddings.detach().clone())
+            # Store unconditional embeddings on CPU to save GPU memory
+            all_uncond_emb.append(uncond_embeddings.detach().clone().cpu())
 
     """
             ==========================================
@@ -532,6 +621,8 @@ def diffattack(
     text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
 
     context = [[torch.cat([all_uncond_emb[i]] * batch_size), text_embeddings] for i in range(len(all_uncond_emb))]
+    # Move the stored uncond embeddings back to the model device when building the context
+    context = [[torch.cat([all_uncond_emb[i].to(model.device)] * batch_size), text_embeddings] for i in range(len(all_uncond_emb))]
     context = [torch.cat(i) for i in context]
 
     original_latent = latent.clone()
@@ -541,6 +632,10 @@ def diffattack(
     optimizer = optim.AdamW([latent], lr=1e-2)
     cross_entro = torch.nn.CrossEntropyLoss()
     init_image = preprocess(image, res)
+
+    # Use AMP (mixed precision) during attack optimization to reduce memory usage
+    use_amp = True
+    scaler = torch.cuda.amp.GradScaler() if use_amp and torch.cuda.is_available() else None
 
     if args.attack_mode == 'transform_dependent':
         print("\n****** Running in Transform-Dependent Attack Mode ******")
@@ -587,7 +682,13 @@ def diffattack(
         init_mask = torch.ones([1, 1, *init_image.shape[-2:]]).cuda()
 
     pbar = tqdm(range(iterations), desc="Iterations")
+    # Free cached memory before starting the optimization loop
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     for _, _ in enumerate(pbar):
+        # Try to reduce fragmentation by freeing cache at the start of each iteration
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         controller.loss = 0
 
         #  The DDIM should begin from 1, as the inversion cannot access X_T but only X_{T-1}
@@ -598,19 +699,28 @@ def diffattack(
         for ind, t in enumerate(model.scheduler.timesteps[1 + start_step - 1:]):
             latents = diffusion_step(model, latents, context[ind], t, guidance_scale)
 
-        before_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 0, is_cpu=False)
-        after_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 1, is_cpu=False)
+        # aggregate attention on CPU to avoid keeping large attention maps on GPU
+        before_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 0, is_cpu=True)
+        after_attention_map = aggregate_attention(prompt, controller, args.res // 32, ("up", "down"), True, 1, is_cpu=True)
 
+        # keep attention maps on CPU and only move the created mask to GPU when needed
         before_true_label_attention_map = before_attention_map[:, :, 1: len(true_label) - 1]
 
         after_true_label_attention_map = after_attention_map[:, :, 1: len(true_label) - 1]
 
         if init_mask is None:
-            init_mask = torch.nn.functional.interpolate((before_true_label_attention_map.detach().clone().mean(
-                -1) / before_true_label_attention_map.detach().clone().mean(-1).max()).unsqueeze(0).unsqueeze(0),
-                                                        init_image.shape[-2:], mode="bilinear").clamp(0, 1)
-            if hard_mask:
-                init_mask = init_mask.gt(0.5).float()
+            # compute mask on CPU (attention maps are on CPU)
+            with torch.no_grad():
+                cpu_mask = torch.nn.functional.interpolate((before_true_label_attention_map.detach().clone().mean(
+                    -1) / before_true_label_attention_map.detach().clone().mean(-1).max()).unsqueeze(0).unsqueeze(0),
+                                                            init_image.shape[-2:], mode="bilinear").clamp(0, 1)
+                if hard_mask:
+                    cpu_mask = cpu_mask.gt(0.5).float()
+            # move mask to model device for multiplication with GPU tensors
+            init_mask = cpu_mask.to(model.device)
+            # free CPU attention maps now that mask is computed
+            del before_attention_map, after_attention_map, before_true_label_attention_map, after_true_label_attention_map
+            torch.cuda.empty_cache()
         init_out_image = model.vae.decode(1 / 0.18215 * latents)['sample'][1:] * init_mask + (
                 1 - init_mask) * init_image
 
@@ -632,19 +742,45 @@ def diffattack(
                 normalized_image = transformed_image.sub(mean).div(std)
                 normalized_image = normalized_image.permute(0, 3, 1, 2)
                 
-                # 3. Predict & Loss
-                if args.dataset_name != "imagenet_compatible":
-                    pred = classifier(normalized_image) / 10
+                # 3. Get prediction
+                # Run classifier under autocast to save memory; we need gradients so allow autograd
+                if scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        if args.dataset_name != "imagenet_compatible":
+                            pred = classifier(normalized_image) / 10
+                        else:
+                            pred = classifier(normalized_image)
                 else:
-                    pred = classifier(normalized_image)
-                
-                total_attack_loss += cross_entro(pred, target_lbl)
+                    if args.dataset_name != "imagenet_compatible":
+                        pred = classifier(normalized_image) / 10
+                    else:
+                        pred = classifier(normalized_image)
 
-            attack_loss = total_attack_loss * args.attack_loss_weight
+                # 4. Calculate Loss per selected loss type
+                if getattr(args, 'attack_loss_type', 'cw') == 'cw':
+                    # targeted CW objective for transform-dependent mode
+                    kappa = getattr(args, 'cw_kappa', 0.0)
+                    total_attack_loss += cw_loss_targeted(pred, target_lbl, kappa=kappa)
+                else:
+                    # standard positive cross-entropy objective as before
+                    total_attack_loss += cross_entro(pred, target_lbl)
+
+            # Regularizers: latent L2 and TV on the output image
+            latent_reg_weight = getattr(args, 'latent_reg_weight', 0.0)
+            tv_weight = getattr(args, 'tv_weight', 0.0)
+            latent_reg = latent_reg_weight * torch.mean((latent - original_latent).pow(2))
+            # adv_image_0_1 is in [0,1] and shape [B,C,H,W]
+            tv_reg = tv_weight * tv_loss(adv_image_0_1)
+
+            # Combine according to loss type: for CE we used a positive CE aggregated and then scaled;
+            # for CW we aggregated CW margins and scale similarly.
+            attack_loss = total_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
 
         else:
             # --- Original attack_loss calculation ---
             out_image = (init_out_image / 2 + 0.5).clamp(0, 1)
+            # keep a CHW copy in [0,1] for TV regularizer
+            out_image_0_1 = out_image.clone()
             out_image = out_image.permute(0, 2, 3, 1)
             mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=out_image.dtype, device=out_image.device)
             std = torch.as_tensor([0.229, 0.224, 0.225], dtype=out_image.dtype, device=out_image.device)
@@ -657,7 +793,22 @@ def diffattack(
             else:
                 pred = classifier(out_image)
                 
-            attack_loss = - cross_entro(pred, label) * args.attack_loss_weight
+            # Choose between untargeted CW or negative cross-entropy (original behavior)
+            if getattr(args, 'attack_loss_type', 'cw') == 'cw':
+                kappa = getattr(args, 'cw_kappa', 0.0)
+                untargeted_loss = cw_loss_untargeted(pred, label, kappa=kappa)
+                base_attack = untargeted_loss * args.attack_loss_weight
+            else:
+                # original code used negative cross-entropy to maximize CE loss w.r.t true label
+                base_attack = - cross_entro(pred, label) * args.attack_loss_weight
+
+            latent_reg_weight = getattr(args, 'latent_reg_weight', 0.0)
+            tv_weight = getattr(args, 'tv_weight', 0.0)
+            latent_reg = latent_reg_weight * torch.mean((latent - original_latent).pow(2))
+            # out_image_0_1 is CHW [B,C,H,W]
+            tv_reg = tv_weight * tv_loss(out_image_0_1)
+
+            attack_loss = base_attack + latent_reg + tv_reg
 
         # “Deceive” Strong Diffusion Model. Details please refer to Section 3.3
         # For a transformation-depended, TARGETED attack, we want the model to have correct classificaiton on a benign label
@@ -683,8 +834,14 @@ def diffattack(
                 f"loss: {loss.item():.5f}")
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Backward & step using GradScaler when available to reduce memory and keep numerical stability
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
     with torch.no_grad():
         controller.loss = 0
@@ -696,6 +853,10 @@ def diffattack(
             latents = diffusion_step(model, latents, context[ind], t, guidance_scale)
 
     # 1. Get the final adversarial image in [0, 1] range
+    # Free cache right before final decode (heavy op)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     out_image = model.vae.decode(1 / 0.18215 * latents.detach())['sample'][1:] * init_mask + (
             1 - init_mask) * init_image
     final_adv_0_1 = (out_image / 2 + 0.5).clamp(0, 1)
@@ -749,7 +910,7 @@ def diffattack(
             print("\n*** Parameter Sweep Data (Copy to CSV) ***")
             print("Scale,Loss_Adv,Loss_Clean")
             
-            # FIX: Inception crashes at 0.2x and 0.3x. 
+            # FIX: Inception crashes at 0.2 and 0.3.
             # So add error handling
             sweep_range = np.arange(0.2, 1.6, 0.1) 
             loss_func = torch.nn.CrossEntropyLoss()

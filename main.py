@@ -1,3 +1,7 @@
+import os
+# Enable expandable segments to reduce fragmentation (helps avoid CUDA OOM in some PyTorch versions)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch
 from diffusers import StableDiffusionPipeline, DDIMScheduler
 from attentionControl import AttentionControlEdit
@@ -46,18 +50,20 @@ parser.add_argument('--attack_loss_weight', default=10, type=int, help='attack l
 parser.add_argument('--cross_attn_loss_weight', default=10000, type=int, help='cross attention loss weight factor')
 parser.add_argument('--self_attn_loss_weight', default=100, type=int, help='self attention loss weight factor')
 
-parser.add_argument('--attack_mode', 
+parser.add_argument('--cw_kappa', default=0.0, type=float,
+                    help='Carlini-Wagner margin (kappa) for CW-style loss; higher -> stronger margin')
+parser.add_argument('--latent_reg_weight', default=0.0, type=float,
+                    help='Weight for L2 regularization on latent difference (latent vs original_latent)')
+parser.add_argument('--tv_weight', default=0.0, type=float,
+                    help='Weight for total-variation regularization on the output image')
+
+parser.add_argument('--attack_mode',
                     default="original", 
                     type=str,
                     choices=["original", "transform_dependent"],
                     help='Which attack logic to use.')
 parser.add_argument('--run_sweep', action='store_true', 
                     help='If set, runs the parameter sweep analysis (loss landscape) after attack generation.')
-parser.add_argument('--transform_type', 
-                    default="scaling", 
-                    type=str,
-                    choices=["scaling", "blurring", "gamma", "jpeg"],
-                    help='Specific transform to use for transform-dependent attack.')
 
 def seed_torch(seed=42):
     """For reproducibility"""
@@ -178,14 +184,19 @@ if __name__ == "__main__":
         tmp_image = Image.open(image_path).convert('RGB')
         tmp_image.save(os.path.join(save_dir, str(ind).rjust(4, '0') + "_originImage.png"))
 
-        adv_image, clean_acc, adv_acc = run_diffusion_attack(tmp_image, label[ind:ind + 1],
-                                                             ldm_stable,
-                                                             diffusion_steps, guidance=guidance,
-                                                             res=res, model_name=model_name,
-                                                             start_step=start_step,
-                                                             iterations=iterations,
-                                                             save_dir=os.path.join(save_dir,
-                                                                                   str(ind).rjust(4, '0')), args=args)
+        adv_image, clean_acc, adv_acc = run_diffusion_attack(
+            tmp_image,
+            label[ind:ind + 1],
+            ldm_stable,
+            diffusion_steps,
+            guidance=guidance,
+            res=res,
+            model_name=model_name,
+            start_step=start_step,
+            iterations=iterations,
+            save_dir=os.path.join(save_dir, str(ind).rjust(4, '0')),
+            args=args,
+        )
         adv_image = adv_image.astype(np.float32) / 255.0
         adv_images.append(adv_image[None].transpose(0, 3, 1, 2))
 
