@@ -978,9 +978,13 @@ def diffattack(
             
             print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
             
-            # Index 0 is always the attack case (Malicious)
-            # Index 1 is always the benign case (Clean/Identity)
-            if idx == 1:
+            # Track success rates for range-based attacks
+            if args.transform_type == "scaling" and "Attack Range" in name:
+                range_success_rates.append(success_rate)
+            
+            # Assuming < 1.0 is attack (malicious) and 1.0 is benign (clean)
+            if t_param == 1.0:
+
                 benign_preservation_rate = success_rate
                 pred_accuracy = success_rate 
             else:
