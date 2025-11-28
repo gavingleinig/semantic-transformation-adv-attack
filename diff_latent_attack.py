@@ -813,11 +813,8 @@ def diffattack(
 
         # “Deceive” Strong Diffusion Model. Details please refer to Section 3.3
         # For a transformation-depended, TARGETED attack, we want the model to have correct classificaiton on a benign label
-        if args.attack_mode == 'transform_dependent':
-            variance_cross_attn_loss = torch.tensor(0.0, device=model.device)
-        else:
-            # Original paper logic
-            variance_cross_attn_loss = after_true_label_attention_map.var() * args.cross_attn_loss_weight
+
+        variance_cross_attn_loss = after_true_label_attention_map.var() * args.cross_attn_loss_weight
 
         # Preserve Content Structure. Details please refer to Section 3.4
         self_attn_loss = controller.loss * args.self_attn_loss_weight
