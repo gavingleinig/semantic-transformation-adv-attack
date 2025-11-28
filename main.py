@@ -74,6 +74,18 @@ parser.add_argument('--transform_type',
                     type=str,
                     choices=["scaling", "blurring", "gamma", "jpeg"],
                     help='Which transformation to use for the specific attack logic.')
+parser.add_argument('--attack_range_min', 
+                    default=0.2, 
+                    type=float,
+                    help='Minimum value for attack range (e.g., 0.2 for scaling)')
+parser.add_argument('--attack_range_max', 
+                    default=0.5, 
+                    type=float,
+                    help='Maximum value for attack range (e.g., 0.5 for scaling)')
+parser.add_argument('--attack_range_samples', 
+                    default=3, 
+                    type=int,
+                    help='Number of samples to draw from the attack range during each optimization iteration')
 
 def seed_torch(seed=42):
     """For reproducibility"""

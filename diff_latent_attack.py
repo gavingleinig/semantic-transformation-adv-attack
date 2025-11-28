@@ -653,9 +653,11 @@ def diffattack(
 
         # --- Configure Objectives based on Transform Type---
         if args.transform_type == "scaling":
-            # Paper uses S ~ [0.4, 0.6] for attack, 1.0 for benign
-            attack_objectives.append((transform_scale, 0.5, target_label_adv))
-            attack_objectives.append((transform_scale, 1.0, target_label_clean))
+            # Range-based attack: sample multiple values from [attack_range_min, attack_range_max]
+            # This will be regenerated inside the optimization loop for diversity
+            # For now, store the configuration
+            pass  # Will be populated dynamically in the loop
+
         
         elif args.transform_type == "blurring":
             # Paper uses Sigma ~ [0.4, 3.1]. Example: 1.5 for attack, 0.0 (no blur) for benign
@@ -729,7 +731,32 @@ def diffattack(
 
         if args.attack_mode == 'transform_dependent':
             
+            # Regenerate attack objectives each iteration with fresh samples from the range
+            attack_objectives = []
+            
+            if args.transform_type == "scaling":
+                # Sample N values from the attack range
+                for _ in range(args.attack_range_samples):
+                    scale_val = np.random.uniform(args.attack_range_min, args.attack_range_max)
+                    attack_objectives.append((transform_scale, scale_val, target_label_adv))
+                # Always preserve benign behavior at 1.0x
+                attack_objectives.append((transform_scale, 1.0, target_label_clean))
+            
+            elif args.transform_type == "blurring":
+                # For other transforms, use original single-point behavior for now
+                attack_objectives.append((transform_blur, 1.5, target_label_adv))
+                attack_objectives.append((transform_blur, 0.001, target_label_clean))
+            
+            elif args.transform_type == "gamma":
+                attack_objectives.append((transform_gamma, 0.5, target_label_adv))
+                attack_objectives.append((transform_gamma, 1.0, target_label_clean))
+            
+            elif args.transform_type == "jpeg":
+                attack_objectives.append((transform_jpeg, 20.0, target_label_adv))
+                attack_objectives.append((transform_jpeg, 100.0, target_label_clean))
+            
             total_attack_loss = 0.0
+
             
             for transform_func, param, target_lbl in attack_objectives:
                 # 1. Apply transform
@@ -871,8 +898,19 @@ def diffattack(
         eval_objectives = []
 
         if args.transform_type == "scaling":
-            eval_objectives.append(("Scale 0.5x (Attack)", transform_scale, 0.5, target_label_adv))
+            # Comprehensive range evaluation: test at multiple points in the attack range
+            print(f"\n  Testing attack range [{args.attack_range_min}, {args.attack_range_max}]:")
+            
+            # Test at 5 evenly spaced points across the attack range
+            test_scales = np.linspace(args.attack_range_min, args.attack_range_max, 5)
+            range_success_rates = []
+            
+            for scale_val in test_scales:
+                eval_objectives.append((f"Scale {scale_val:.2f}x (Attack Range)", transform_scale, scale_val, target_label_adv))
+                
+            # Also test benign preservation at 1.0x
             eval_objectives.append(("Scale 1.0x (Benign)", transform_scale, 1.0, target_label_clean))
+
         
         elif args.transform_type == "blurring":
             eval_objectives.append(("Blur Sigma 1.5 (Attack)", transform_blur, 1.5, target_label_adv))
@@ -908,12 +946,25 @@ def diffattack(
             
             print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
             
+            # Track success rates for range-based attacks
+            if args.transform_type == "scaling" and "Attack Range" in name:
+                range_success_rates.append(success_rate)
+            
             # Assuming < 1.0 is attack (malicious) and 1.0 is benign (clean)
             if t_param == 1.0:
+
                 benign_preservation_rate = success_rate
                 pred_accuracy = success_rate # Keep this for legacy compatibility if needed
             else:
                 attack_success_rate = success_rate
+
+        # Print summary for range-based attacks
+        if args.transform_type == "scaling" and len(range_success_rates) > 0:
+            avg_range_success = np.mean(range_success_rates)
+            print(f"\n  *** Range Attack Summary ***")
+            print(f"  Average Success Rate across [{args.attack_range_min}, {args.attack_range_max}]: {avg_range_success * 100:.1f}%")
+            print(f"  Benign Preservation at 1.0x: {benign_preservation_rate * 100:.1f}%")
+
 
         if args.run_sweep:
             print("\n*** Parameter Sweep Data (Copy to CSV) ***")
