@@ -996,36 +996,68 @@ def diffattack(
 
         if args.run_sweep:
             print("\n*** Parameter Sweep Data (Copy to CSV) ***")
-            print("Scale,Loss_Adv,Loss_Clean")
             
-            # FIX: Inception crashes at 0.2 and 0.3.
-            # So add error handling
-            sweep_range = np.arange(0.2, 1.6, 0.1) 
             loss_func = torch.nn.CrossEntropyLoss()
             
-            for s_val in sweep_range:
-                # 1. Transform
-                s_img = transform_scale(final_adv_0_1, s_val)
-                
-                # 2. Normalize
-                s_img = s_img.permute(0, 2, 3, 1)
-                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=s_img.dtype, device=s_img.device)
-                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=s_img.dtype, device=s_img.device)
-                s_img = s_img.sub(mean).div(std).permute(0, 3, 1, 2)
-                
+            # 1. Configure Sweep based on transform type
+            if args.transform_type == "scaling":
+                # Sweep from 0.1x to 1.5x
+                sweep_range = np.arange(0.1, 1.6, 0.1)
+                sweep_func = transform_scale
+                param_name = "Scale"
+            elif args.transform_type == "blurring":
+                # Sweep Sigma from 0.0 to 3.0
+                sweep_range = np.arange(0.0, 3.2, 0.2)
+                sweep_func = transform_blur
+                param_name = "Sigma"
+            elif args.transform_type == "gamma":
+                # Sweep Gamma from 0.2 to 2.2
+                sweep_range = np.arange(0.2, 2.3, 0.1)
+                sweep_func = transform_gamma
+                param_name = "Gamma"
+            elif args.transform_type == "jpeg":
+                # Sweep Quality from 10 to 100
+                sweep_range = np.arange(10, 105, 5)
+                sweep_func = transform_jpeg
+                param_name = "Quality"
+            else:
+                print(f"Sweep not implemented for {args.transform_type}")
+                sweep_range = []
+                sweep_func = None
+                param_name = "Unknown"
+
+            print(f"{param_name},Loss_Adv,Loss_Clean")
+            
+            # 2. Run the loop
+            for val in sweep_range:
                 try:
+                    # Apply Transform
+                    # Ensure val is a float for everything except JPEG which prefers valid quality ranges
+                    t_val = float(val) 
+                    
+                    s_img = sweep_func(final_adv_0_1, t_val)
+                    
+                    # Normalize (Standard ImageNet)
+                    s_img = s_img.permute(0, 2, 3, 1)
+                    mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=s_img.dtype, device=s_img.device)
+                    std = torch.as_tensor([0.229, 0.224, 0.225], dtype=s_img.dtype, device=s_img.device)
+                    s_img = s_img.sub(mean).div(std).permute(0, 3, 1, 2)
+                    
+                    # Forward Pass
                     logits = classifier(s_img)
                     
                     loss_adv = loss_func(logits, target_label_adv).item()
                     loss_clean = loss_func(logits, target_label_clean).item()
                     
-                    print(f"{s_val:.1f},{loss_adv:.4f},{loss_clean:.4f}")
+                    print(f"{val:.2f},{loss_adv:.4f},{loss_clean:.4f}")
                     
                 except RuntimeError as e:
-                    if "size" in str(e) and "Kernel" in str(e):
-                        print(f"{s_val:.1f},NaN,NaN")
+                    # Handle size mismatches (common in Scaling with Inception) or OOM
+                    if "size" in str(e) or "Kernel" in str(e):
+                        print(f"{val:.2f},NaN,NaN")
                     else:
-                        raise e  # Re-raise other unexpected errors
+                        # If it's a different error, we still want to see it
+                        print(f"{val:.2f},Error,Error")
 
     else:
         # --- Original/Standard Evaluation ---
