@@ -886,7 +886,12 @@ def diffattack(
             eval_objectives.append(("JPEG Q=20 (Attack)", transform_jpeg, 20.0, target_label_adv))
             eval_objectives.append(("JPEG Q=100 (Benign)", transform_jpeg, 100.0, target_label_clean))
 
-        for name, t_func, t_param, t_target in eval_objectives:
+        attack_success_rate = 0.0
+        benign_preservation_rate = 0.0
+        pred_accuracy = 0.0
+
+        # Use enumerate to safely identify which objective is which
+        for idx, (name, t_func, t_param, t_target) in enumerate(eval_objectives):
             # A. Apply Transform
             eval_img = t_func(final_adv_0_1, t_param)
 
@@ -902,16 +907,16 @@ def diffattack(
             pred_label = torch.argmax(pred_logits, 1).detach()
             
             # D. Check Success
-            # Success means predicting the specific TARGET for this transform
             is_success = (pred_label == t_target).sum().item()
             success_rate = is_success / len(label)
             
             print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
             
-            # Assuming < 1.0 is attack (malicious) and 1.0 is benign (clean)
-            if t_param == 1.0:
+            # Index 0 is always the attack case (Malicious)
+            # Index 1 is always the benign case (Clean/Identity)
+            if idx == 1:
                 benign_preservation_rate = success_rate
-                pred_accuracy = success_rate # Keep this for legacy compatibility if needed
+                pred_accuracy = success_rate 
             else:
                 attack_success_rate = success_rate
 
