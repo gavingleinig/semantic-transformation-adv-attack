@@ -758,9 +758,37 @@ def diffattack(
             total_attack_loss = 0.0
 
             
-            for transform_func, param, target_lbl in attack_objectives:
-                # 1. Apply transform
-                transformed_image = transform_func(adv_image_0_1, param)
+            for transform_func, center_param, target_lbl in attack_objectives:
+                # --- START EoT IMPLEMENTATION ---
+                # Apply randomness based on the paper's settings (Section 4.2)
+                
+                if transform_func == transform_scale:
+                    # Range: [center - 0.1, center + 0.1]
+                    r = 0.1
+                    current_param = center_param - r + (2 * r * torch.rand(1, device=adv_image_0_1.device).item())
+                    
+                elif transform_func == transform_blur:
+                    # Range: [center - 0.1, center + 0.1]
+                    r = 0.1
+                    current_param = center_param - r + (2 * r * torch.rand(1, device=adv_image_0_1.device).item())
+                    current_param = max(current_param, 0.001)
+                    
+                elif transform_func == transform_gamma:
+                    # Range: [center - 0.1, center + 0.1]
+                    r = 0.1
+                    current_param = center_param - r + (2 * r * torch.rand(1, device=adv_image_0_1.device).item())
+                    
+                elif transform_func == transform_jpeg:
+                    # Range: [Q - 1, Q + 1]
+                    r = 1.0
+                    current_param = center_param - r + (2 * r * torch.rand(1, device=adv_image_0_1.device).item())
+                    
+                else:
+                    # Fallback for identity or other transforms
+                    current_param = center_param
+
+                # 1. Apply transform with the randomized parameter
+                transformed_image = transform_func(adv_image_0_1, current_param)
                 
                 # 2. Normalize
                 transformed_image = transformed_image.permute(0, 2, 3, 1)
