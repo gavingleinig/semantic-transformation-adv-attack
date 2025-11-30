@@ -156,12 +156,18 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
         nb_classes = 196
     else:
         raise NotImplementedError
-
-    # Define generic helper to apply any transform function to numpy batch
-    def apply_transform(img_np, func, param):
+        
+    FIXED_SIZE_MODELS = ['vit', 'swin', 'deit-b', 'deit-s', 'mixer-b', 'mixer-l']
+    def apply_transform(img_np, func, param, model_name):
             # Numpy (N,C,H,W) -> Tensor -> Transform -> Numpy
             t = torch.from_numpy(img_np).float().cuda()
             t = func(t, param)
+            
+            # Only resize if the model architecture fails with variable sizes (Transformers)
+            if model_name in FIXED_SIZE_MODELS:
+                if t.shape[-1] != res or t.shape[-2] != res:
+                    t = F.interpolate(t, size=(res, res), mode='bilinear', align_corners=False)
+
             return t.cpu().numpy()
     
     all_clean_accuracy = []
@@ -213,7 +219,7 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
 
             # 2. Evaluate Attack Success (Malicious Param)
             # Use the selected function and parameter
-            adv_img_attack = apply_transform(adv_img, t_func, p_attack)
+            adv_img_attack = apply_transform(adv_img, t_func, p_attack, name)
             pred_attack = f_model.predict(adv_img_attack, batch_size=50)
             
             # Handle offset for specific robust models
@@ -226,7 +232,7 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
 
             # 3. Evaluate Benign Consistency (Clean Param)
             # Use the selected function and parameter
-            adv_img_clean = apply_transform(adv_img, t_func, p_benign)
+            adv_img_clean = apply_transform(adv_img, t_func, p_benign, name)
             pred_clean = f_model.predict(adv_img_clean, batch_size=50)
             
             pred_idx_clean = np.argmax(pred_clean, axis=1) - 1 if "adv" in name else np.argmax(pred_clean, axis=1)
