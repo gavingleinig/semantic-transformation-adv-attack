@@ -199,7 +199,7 @@ if __name__ == "__main__":
 
         sys.exit()
 
-    for ind, image_path in enumerate(all_images):
+    for ind, image_path in enumerate(all_images[:3]):
         print(f"\n\n================================================================================")
         print(f"Processing Image {ind + 1}/{len(all_images)}: {os.path.basename(image_path)}")
         
