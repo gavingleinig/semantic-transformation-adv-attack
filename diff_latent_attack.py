@@ -735,10 +735,14 @@ def diffattack(
             attack_objectives = []
             
             if args.transform_type == "scaling":
-                # Sample N values from the attack range
-                for _ in range(args.attack_range_samples):
-                    scale_val = np.random.uniform(args.attack_range_min, args.attack_range_max)
-                    attack_objectives.append((transform_scale, scale_val, target_label_adv))
+                # Iterate through the attack range systematically
+                # Generate evenly spaced values across the configured range
+                num_samples = getattr(args, 'attack_range_samples', 4)
+                scale_values = np.linspace(args.attack_range_min, args.attack_range_max, num_samples)
+                
+                # Add targeted adversarial objectives for each scale in the range
+                for scale_val in scale_values:
+                    attack_objectives.append((transform_scale, float(scale_val), target_label_adv))
                 # Always preserve benign behavior at 1.0x
                 attack_objectives.append((transform_scale, 1.0, target_label_clean))
             
