@@ -794,6 +794,11 @@ def diffattack(
                 # 1. Apply transform with the randomized parameter
                 transformed_image = transform_func(adv_image_0_1, current_param)
                 
+                # For scaling transformations, resize back to classifier input size
+                if transform_func == transform_scale:
+                    # Resize back to original size (res x res) for classifier
+                    transformed_image = F.interpolate(transformed_image, size=(res, res), mode='bilinear', align_corners=False)
+                
                 # 2. Normalize
                 transformed_image = transformed_image.permute(0, 2, 3, 1)
                 mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=transformed_image.dtype, device=transformed_image.device)
@@ -964,6 +969,11 @@ def diffattack(
         for idx, (name, t_func, t_param, t_target) in enumerate(eval_objectives):
             # A. Apply Transform
             eval_img = t_func(final_adv_0_1, t_param)
+            
+            # For scaling transformations, resize back to classifier input size
+            if t_func == transform_scale:
+                # Resize back to original size (res x res) for classifier
+                eval_img = F.interpolate(eval_img, size=(res, res), mode='bilinear', align_corners=False)
 
             # B. Normalize (Standard ImageNet normalization)
             eval_img = eval_img.permute(0, 2, 3, 1)
@@ -1044,6 +1054,11 @@ def diffattack(
                     t_val = float(val) 
                     
                     s_img = sweep_func(final_adv_0_1, t_val)
+                    
+                    # For scaling transformations, resize back to classifier input size
+                    if sweep_func == transform_scale:
+                        # Resize back to original size (res x res) for classifier
+                        s_img = F.interpolate(s_img, size=(res, res), mode='bilinear', align_corners=False)
                     
                     # Normalize (Standard ImageNet)
                     s_img = s_img.permute(0, 2, 3, 1)
