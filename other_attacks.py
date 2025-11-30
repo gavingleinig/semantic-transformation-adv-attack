@@ -162,6 +162,10 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
             # Numpy (N,C,H,W) -> Tensor -> Transform -> Numpy
             t = torch.from_numpy(img_np).float().cuda()
             t = func(t, param)
+            # For scaling transformations, resize back to classifier input size
+            if func == transform_scale:
+                # Resize back to original size (res x res) for classifier
+                t = F.interpolate(t, size=(res, res), mode='bilinear', align_corners=False)
             return t.cpu().numpy()
     
     all_clean_accuracy = []
