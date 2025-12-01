@@ -975,6 +975,19 @@ def diffattack(
                 # Resize back to original size (res x res) for classifier
                 eval_img = F.interpolate(eval_img, size=(res, res), mode='bilinear', align_corners=False)
 
+
+# DEBUG: Save transformed image before normalization
+            with torch.no_grad():
+                # Convert to numpy format for saving (image is in [0,1] range)
+                debug_img = eval_img.clone().detach()
+                debug_img = debug_img.permute(0, 2, 3, 1)  # [B, H, W, C]
+                debug_img_np = (debug_img.cpu().numpy() * 255).astype(np.uint8)
+                # Create a safe filename from the name
+                safe_name = name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "p")
+                debug_save_path = save_path + f"_eval_{idx:02d}_{safe_name}.png"
+                view_images(debug_img_np, show=False, save_path=debug_save_path)
+                print(f"  [DEBUG] Saved transformed image: {debug_save_path}")
+
             # B. Normalize (Standard ImageNet normalization)
             eval_img = eval_img.permute(0, 2, 3, 1)
             mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=eval_img.dtype, device=eval_img.device)
