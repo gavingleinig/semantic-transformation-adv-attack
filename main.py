@@ -240,4 +240,4 @@ if __name__ == "__main__":
             Test the robustness of the generated adversarial examples across a variety of normally trained models or
             adversarially trained models.
     """
-    model_transfer(images, adv_images, label, res, save_path=save_dir, args=args)
+    # model_transfer(images, adv_images, label, res, save_path=save_dir, args=args)
