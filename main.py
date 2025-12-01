@@ -195,11 +195,11 @@ if __name__ == "__main__":
                 Test the robustness of the generated adversarial examples across a variety of normally trained models or
                 adversarially trained models.
         """
-        model_transfer(images, adv_images, label, res, save_path=save_dir, fid_path=images_root, args=args)
+        # model_transfer(images, adv_images, label, res, save_path=save_dir, fid_path=images_root, args=args)
 
         sys.exit()
 
-    for ind, image_path in enumerate(all_images[:3]):
+    for ind, image_path in enumerate(all_images):
         print(f"\n\n================================================================================")
         print(f"Processing Image {ind + 1}/{len(all_images)}: {os.path.basename(image_path)}")
         
