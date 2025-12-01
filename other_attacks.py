@@ -191,53 +191,61 @@ def model_transfer(clean_img, adv_img, label, res, save_path=r"C:\Users\PC\Deskt
             target_adv = (label + 100) % 1000  # Malicious target
             target_clean = label              # Benign target
             
-            # 1. Determine Transform Type and Parameters
+            # 1. Determine Transform Type and Range Parameters
             if args.transform_type == "scaling":
                 t_func = transform_scale
-                p_attack = 0.5
-                p_benign = 1.0
-                attack_name = "Scale 0.5x"
+                attack_params = np.linspace(args.attack_range_min, args.attack_range_max, args.attack_range_samples)
+                benign_param = 1.0
+                param_name = "Scale"
             elif args.transform_type == "blurring":
                 t_func = transform_blur
-                p_attack = 1.5
-                p_benign = 0.001
-                attack_name = "Blur Sigma 1.5"
+                attack_params = np.linspace(args.attack_range_min, args.attack_range_max, args.attack_range_samples)
+                benign_param = 0.001
+                param_name = "Sigma"
             elif args.transform_type == "gamma":
                 t_func = transform_gamma
-                p_attack = 0.5
-                p_benign = 1.0
-                attack_name = "Gamma 0.5"
+                attack_params = np.linspace(args.attack_range_min, args.attack_range_max, args.attack_range_samples)
+                benign_param = 1.0
+                param_name = "Gamma"
             elif args.transform_type == "jpeg":
                 t_func = transform_jpeg
-                p_attack = 20.0
-                p_benign = 100.0
-                attack_name = "JPEG Q=20"
+                attack_params = np.linspace(args.attack_range_min, args.attack_range_max, args.attack_range_samples)
+                benign_param = 100.0
+                param_name = "Quality"
             else:
                 raise ValueError(f"Unknown transform type: {args.transform_type}")
 
-            # 2. Evaluate Attack Success (Malicious Param)
-            # Use the selected function and parameter
-            adv_img_attack = apply_transform(adv_img, t_func, p_attack)
-            pred_attack = f_model.predict(adv_img_attack, batch_size=50)
-            
-            # Handle offset for specific robust models
-            pred_idx_attack = np.argmax(pred_attack, axis=1) - 1 if "adv" in name else np.argmax(pred_attack, axis=1)
-            
-            success_atk = np.sum(pred_idx_attack == target_adv) / len(label)
-            print(f"Attack Success ({attack_name} -> Target+100): {success_atk * 100:.2f}%")
-            print(f"Attack Success ({attack_name} -> Target+100): {success_atk * 100:.2f}%", file=log)
-            all_adv_accuracy.append(success_atk * 100)
+            # 2. Evaluate Attack Success over the parameter range
+            range_success_atk = []
+            print(f"\n[Transfer] Testing {args.transform_type} attack range "
+                  f"[{args.attack_range_min}, {args.attack_range_max}] on {name}")
 
-            # 3. Evaluate Benign Consistency (Clean Param)
-            # Use the selected function and parameter
-            adv_img_clean = apply_transform(adv_img, t_func, p_benign)
+            for p_attack in attack_params:
+                adv_img_attack = apply_transform(adv_img, t_func, float(p_attack))
+                pred_attack = f_model.predict(adv_img_attack, batch_size=50)
+                
+                # Handle offset for specific robust models
+                pred_idx_attack = np.argmax(pred_attack, axis=1) - 1 if "adv" in name else np.argmax(pred_attack, axis=1)
+                
+                success_atk = np.sum(pred_idx_attack == target_adv) / len(label)
+                range_success_atk.append(success_atk)
+                print(f"  Attack Success ({param_name}={p_attack:.3f} -> Target+100): {success_atk * 100:.2f}%")
+                print(f"  Attack Success ({param_name}={p_attack:.3f} -> Target+100): {success_atk * 100:.2f}%", file=log)
+
+            avg_success_atk = np.mean(range_success_atk) * 100.0 if len(range_success_atk) > 0 else 0.0
+            print(f"  [Range Summary] Avg Attack Success over range: {avg_success_atk:.2f}%")
+            print(f"  [Range Summary] Avg Attack Success over range: {avg_success_atk:.2f}%", file=log)
+            all_adv_accuracy.append(avg_success_atk)
+
+            # 3. Evaluate Benign Consistency (single benign parameter)
+            adv_img_clean = apply_transform(adv_img, t_func, benign_param)
             pred_clean = f_model.predict(adv_img_clean, batch_size=50)
             
             pred_idx_clean = np.argmax(pred_clean, axis=1) - 1 if "adv" in name else np.argmax(pred_clean, axis=1)
             
             success_clean = np.sum(pred_idx_clean == target_clean) / len(label)
-            print(f"Benign Consistency (Param {p_benign} -> Clean Label): {success_clean * 100:.2f}%")
-            print(f"Benign Consistency (Param {p_benign} -> Clean Label): {success_clean * 100:.2f}%", file=log)
+            print(f"Benign Consistency (Param {benign_param} -> Clean Label): {success_clean * 100:.2f}%")
+            print(f"Benign Consistency (Param {benign_param} -> Clean Label): {success_clean * 100:.2f}%", file=log)
             all_clean_accuracy.append(success_clean * 100)
         # === OLD BRANCH: Standard Evaluation ===
         else:

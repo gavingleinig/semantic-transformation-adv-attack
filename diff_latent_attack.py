@@ -646,34 +646,9 @@ def diffattack(
         # Target B: Clean (Identity Preservation)
         target_label_clean = label.clone()
         
-        # 3. Define Objectives List: (Transform Function, Scale_Factor, Target_Label)
-        # We attack at 0.5x (Malicious) and preserve at 1.0x (Clean)
-
+        # 3. Define Objectives List: (Transform Function, Param, Target_Label)
+        # For transform-dependent mode, we will build range-based objectives
         attack_objectives = []
-
-        # --- Configure Objectives based on Transform Type---
-        if args.transform_type == "scaling":
-            # Range-based attack: sample multiple values from [attack_range_min, attack_range_max]
-            # This will be regenerated inside the optimization loop for diversity
-            # For now, store the configuration
-            pass  # Will be populated dynamically in the loop
-
-        
-        elif args.transform_type == "blurring":
-            # Paper uses Sigma ~ [0.4, 3.1]. Example: 1.5 for attack, 0.0 (no blur) for benign
-            # Note: Sigma=0 is identity, but gaussian_blur requires >0, handled in func
-            attack_objectives.append((transform_blur, 1.5, target_label_adv))
-            attack_objectives.append((transform_blur, 0.001, target_label_clean))
-
-        elif args.transform_type == "gamma":
-            # Paper uses Gamma ~ [0.4, 2.1]. Example: 0.5 for attack, 1.0 for benign
-            attack_objectives.append((transform_gamma, 0.5, target_label_adv))
-            attack_objectives.append((transform_gamma, 1.0, target_label_clean))
-
-        elif args.transform_type == "jpeg":
-            # Paper uses Quality ~ [19, 81]. Example: Q=20 for attack, Q=100 (clean) for benign
-            attack_objectives.append((transform_jpeg, 20.0, target_label_adv))
-            attack_objectives.append((transform_jpeg, 100.0, target_label_clean))
 
 
     #  “Pseudo” Mask for better Imperceptibility, yet sacrifice the transferability. Details please refer to Appendix D.
@@ -735,28 +710,39 @@ def diffattack(
             attack_objectives = []
             
             if args.transform_type == "scaling":
-                # Iterate through the attack range systematically
-                # Generate evenly spaced values across the configured range
-                num_samples = getattr(args, 'attack_range_samples', 4)
+                # Range-based attack over scaling factors [attack_range_min, attack_range_max]
+                num_samples = getattr(args, 'attack_range_samples', 3)
                 scale_values = np.linspace(args.attack_range_min, args.attack_range_max, num_samples)
-                
-                # Add targeted adversarial objectives for each scale in the range
                 for scale_val in scale_values:
                     attack_objectives.append((transform_scale, float(scale_val), target_label_adv))
                 # Always preserve benign behavior at 1.0x
                 attack_objectives.append((transform_scale, 1.0, target_label_clean))
             
             elif args.transform_type == "blurring":
-                # For other transforms, use original single-point behavior for now
-                attack_objectives.append((transform_blur, 1.5, target_label_adv))
+                # Range-based attack over blur sigma using the same generic range args
+                num_samples = getattr(args, 'attack_range_samples', 3)
+                sigma_values = np.linspace(args.attack_range_min, args.attack_range_max, num_samples)
+                for sigma in sigma_values:
+                    attack_objectives.append((transform_blur, float(sigma), target_label_adv))
+                # Benign: near-identity blur
                 attack_objectives.append((transform_blur, 0.001, target_label_clean))
             
             elif args.transform_type == "gamma":
-                attack_objectives.append((transform_gamma, 0.5, target_label_adv))
+                # Range-based attack over gamma
+                num_samples = getattr(args, 'attack_range_samples', 3)
+                gamma_values = np.linspace(args.attack_range_min, args.attack_range_max, num_samples)
+                for g in gamma_values:
+                    attack_objectives.append((transform_gamma, float(g), target_label_adv))
+                # Benign: gamma = 1.0
                 attack_objectives.append((transform_gamma, 1.0, target_label_clean))
             
             elif args.transform_type == "jpeg":
-                attack_objectives.append((transform_jpeg, 20.0, target_label_adv))
+                # Range-based attack over JPEG quality
+                num_samples = getattr(args, 'attack_range_samples', 3)
+                quality_values = np.linspace(args.attack_range_min, args.attack_range_max, num_samples)
+                for q in quality_values:
+                    attack_objectives.append((transform_jpeg, float(q), target_label_adv))
+                # Benign: high quality JPEG
                 attack_objectives.append((transform_jpeg, 100.0, target_label_clean))
             
             total_attack_loss = 0.0
@@ -933,32 +919,50 @@ def diffattack(
         target_label_clean = label.clone()
 
         eval_objectives = []
+        range_success_rates = []
 
         if args.transform_type == "scaling":
             # Comprehensive range evaluation: test at multiple points in the attack range
-            print(f"\n  Testing attack range [{args.attack_range_min}, {args.attack_range_max}]:")
+            print(f"\n  Testing attack range [{args.attack_range_min}, {args.attack_range_max}] (scale):")
             
-            # Test at 5 evenly spaced points across the attack range
             test_scales = np.linspace(args.attack_range_min, args.attack_range_max, 5)
-            range_success_rates = []
-            
             for scale_val in test_scales:
                 eval_objectives.append((f"Scale {scale_val:.2f}x (Attack Range)", transform_scale, scale_val, target_label_adv))
                 
             # Also test benign preservation at 1.0x
             eval_objectives.append(("Scale 1.0x (Benign)", transform_scale, 1.0, target_label_clean))
-
         
         elif args.transform_type == "blurring":
-            eval_objectives.append(("Blur Sigma 1.5 (Attack)", transform_blur, 1.5, target_label_adv))
+            # Range-based evaluation over blur sigma using generic range args
+            print(f"\n  Testing blur range [{args.attack_range_min}, {args.attack_range_max}] (sigma):")
+            
+            test_sigmas = np.linspace(args.attack_range_min, args.attack_range_max, 5)
+            for sigma in test_sigmas:
+                eval_objectives.append((f"Blur Sigma {sigma:.2f} (Attack Range)", transform_blur, sigma, target_label_adv))
+            
+            # Benign: near-identity blur
             eval_objectives.append(("Blur Sigma 0.001 (Benign)", transform_blur, 0.001, target_label_clean))
 
         elif args.transform_type == "gamma":
-            eval_objectives.append(("Gamma 0.5 (Attack)", transform_gamma, 0.5, target_label_adv))
+            # Range-based evaluation over gamma
+            print(f"\n  Testing gamma range [{args.attack_range_min}, {args.attack_range_max}]:")
+            
+            test_gammas = np.linspace(args.attack_range_min, args.attack_range_max, 5)
+            for g in test_gammas:
+                eval_objectives.append((f"Gamma {g:.2f} (Attack Range)", transform_gamma, g, target_label_adv))
+            
+            # Benign: gamma = 1.0
             eval_objectives.append(("Gamma 1.0 (Benign)", transform_gamma, 1.0, target_label_clean))
 
         elif args.transform_type == "jpeg":
-            eval_objectives.append(("JPEG Q=20 (Attack)", transform_jpeg, 20.0, target_label_adv))
+            # Range-based evaluation over JPEG quality
+            print(f"\n  Testing JPEG quality range [{args.attack_range_min}, {args.attack_range_max}]:")
+            
+            test_qualities = np.linspace(args.attack_range_min, args.attack_range_max, 5)
+            for q in test_qualities:
+                eval_objectives.append((f"JPEG Q={q:.1f} (Attack Range)", transform_jpeg, q, target_label_adv))
+            
+            # Benign: high quality JPEG
             eval_objectives.append(("JPEG Q=100 (Benign)", transform_jpeg, 100.0, target_label_clean))
 
         attack_success_rate = 0.0
@@ -1005,8 +1009,8 @@ def diffattack(
             
             print(f"[{name}] Target: {t_target.item()} | Pred: {pred_label.item()} | Success Rate: {success_rate * 100:.1f}%")
             
-            # Track success rates for range-based attacks
-            if args.transform_type == "scaling" and "Attack Range" in name:
+            # Track success rates for range-based attacks (any transform)
+            if "Attack Range" in name:
                 range_success_rates.append(success_rate)
             
             # Assuming < 1.0 is attack (malicious) and 1.0 is benign (clean)
@@ -1017,12 +1021,12 @@ def diffattack(
             else:
                 attack_success_rate = success_rate
 
-        # Print summary for range-based attacks
-        if args.transform_type == "scaling" and len(range_success_rates) > 0:
+        # Print summary for range-based attacks (any transform)
+        if len(range_success_rates) > 0:
             avg_range_success = np.mean(range_success_rates)
             print(f"\n  *** Range Attack Summary ***")
             print(f"  Average Success Rate across [{args.attack_range_min}, {args.attack_range_max}]: {avg_range_success * 100:.1f}%")
-            print(f"  Benign Preservation at 1.0x: {benign_preservation_rate * 100:.1f}%")
+            print(f"  Benign Preservation at 1.0x or benign param: {benign_preservation_rate * 100:.1f}%")
 
 
         if args.run_sweep:
