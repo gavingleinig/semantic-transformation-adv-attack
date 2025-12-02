@@ -746,7 +746,7 @@ def diffattack(
                 attack_objectives.append((transform_jpeg, 100.0, target_label_clean))
             
             total_attack_loss = 0.0
-
+            num_objectives = 0  # Track number of objectives for averaging
             
             for transform_func, center_param, target_lbl in attack_objectives:
                 # --- START EoT IMPLEMENTATION ---
@@ -815,7 +815,14 @@ def diffattack(
                 else:
                     # standard positive cross-entropy objective as before
                     total_attack_loss += cross_entro(pred, target_lbl)
+                num_objectives += 1
 
+            # Average the loss across all objectives to prevent scaling issues
+            if num_objectives > 0:
+                avg_attack_loss = total_attack_loss / num_objectives
+            else:
+                avg_attack_loss = total_attack_loss
+            
             # Regularizers: latent L2 and TV on the output image
             latent_reg_weight = getattr(args, 'latent_reg_weight', 0.0)
             tv_weight = getattr(args, 'tv_weight', 0.0)
@@ -825,7 +832,7 @@ def diffattack(
 
             # Combine according to loss type: for CE we used a positive CE aggregated and then scaled;
             # for CW we aggregated CW margins and scale similarly.
-            attack_loss = total_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
+            attack_loss = avg_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
 
         else:
             # --- Original attack_loss calculation ---
