@@ -825,7 +825,7 @@ def diffattack(
 
             # Combine according to loss type: for CE we used a positive CE aggregated and then scaled;
             # for CW we aggregated CW margins and scale similarly.
-            attack_loss = avg_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
+            attack_loss = total_attack_loss * args.attack_loss_weight + latent_reg + tv_reg
 
         else:
             # --- Original attack_loss calculation ---
