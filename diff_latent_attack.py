@@ -95,6 +95,10 @@ def tv_loss(x: torch.Tensor) -> torch.Tensor:
 
 def transform_blur(img_tensor, sigma):
     s = sigma if isinstance(sigma, (float, int)) else sigma.item()
+    # NEW: Create a natural barrier at σ≤0.001
+    if s <= 0.001:
+        return img_tensor  # Identity - no blur applied!
+    
     s = max(s, 0.001) 
     return TF.gaussian_blur(img_tensor, kernel_size=[5, 5], sigma=[s, s])
 
