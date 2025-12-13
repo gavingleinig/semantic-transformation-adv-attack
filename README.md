@@ -6,7 +6,9 @@ This repository contains the implementation of SleeperDiff, a framework for gene
 
 
 
-Adapted from the [DiffAttack] (https://github.com/WindVChen/DiffAttack) codebase, SleeperDiff introduces a dual-objective optimization strategy that embeds adversarial triggers directly into the latent space of a pre-trained generative model.
+Adapted from the [DiffAttack](https://github.com/WindVChen/DiffAttack) codebase, SleeperDiff introduces a dual-objective optimization strategy that embeds adversarial triggers directly into the latent space of a pre-trained generative model.
+
+[Read the Project Writeup (PDF)](AI_Sec_Project_Report_Gleinig_Murugan_Nadakatti.pdf)
 
 **Link to Colab Notebook that sets environment up!**
 [link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
@@ -115,6 +117,7 @@ We evaluated SleeperDiff on a subset of the ImageNet-Compatible dataset ($N=100$
 ### Perceptual Quality
 To quantify stealth, we computed LPIPS and FID scores. Our method achieved an average **LPIPS score of 0.132**, comparable to state-of-the-art diffusion attacks (e.g., DiffAttack at 0.126) and significantly better than color-based attacks.
 
+More visual results and discussion are present in the [Project Writeup](AI_Sec_Project_Report_Gleinig_Murugan_Nadakatti.pdf)
 ---
 
 ## Future Work
