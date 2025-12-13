@@ -1,26 +1,12 @@
-# Transformation-Triggered Adversarial Attacks
+# SleeperDiff: Generating Transform-Dependent Attacks via Diffusion Models
 
-This repository contains code for exploring **conditional generative adversarial examples**, adapted from the codebase of "Diffusion Models for Imperceptible and Transferable Adversarial Attack" [link](https://github.com/WindVChen/DiffAttack)
+Authors: Gavin Gleinig, Vijay Murugan, Shristi Nadakatti
 
-Building off on the DiffAttack framework, our main contribution is to test and evaluable the feasability of transformation-triggered attacks.
+This repository contains the implementation of SleeperDiff, a framework for generating transform-dependent adversarial examples using diffusion models.
 
-Notes to team members!
 
-Code-Wise:
-- [main.py](main.py) parses args
-- [diff_latent_attack.py](diff_latent_attack.py) runs code to make attacks adversarial
-   - So, our main changes will be in diff_latent_attack.py
-   - [DiffAttack](https://ieeexplore.ieee.org/abstract/document/10716799) uses 3 loss terms: 
-      - L_attack, L_structure, and L_transfer
-   - Most of the code in diff_latent_attack.py deals with these terms
-   - For a basic attack to work, all that we really need is L_attack
-- For our attack, I propose we modify the L_attack 
 
-Project-Wise:
-- Future things to potentially implement:
-   - Evaluate our attack against other Defenses
-   - Add more transforms (currently just does scaing)
-   - Find a nice way to visualize results (for presentation)
+Adapted from the [DiffAttack] (https://github.com/WindVChen/DiffAttack) codebase, SleeperDiff introduces a dual-objective optimization strategy that embeds adversarial triggers directly into the latent space of a pre-trained generative model.
 
 **Link to Colab Notebook that sets environment up!**
 [link](https://colab.research.google.com/drive/16HFnYTZ5P4cJd80BqmL0yZq3HP7wpxVr?usp=sharing)
@@ -115,4 +101,32 @@ Our project tests our attacks against adversarially trained models.  Future work
 - [DiffPure](https://github.com/NVlabs/DiffPure): Modify the original codes to evaluate the existing adversarial examples, not crafted examples again.
 
 ## Results
+
+We evaluated SleeperDiff on a subset of the ImageNet-Compatible dataset ($N=100$) targeting an Inception-v3 classifier. The table below summarizes the Attack Success Rate (ASR) and Benign Accuracy (Clean) for our three primary transformations.
+
+| Transformation | Benign Accuracy (Clean) | Attack Success Rate (Adv) |
+| :--- | :---: | :---: |
+| **Blurring** | 100.0% | **72.0%** |
+| **Gamma** | 100.0% | **59.0%** |
+| **Scaling** | 97.0% | 5.0%* |
+
+*\*Note: Scaling proved difficult in the latent space compared to pixel-space methods, likely due to feature loss during downsampling. While the attack success was low, the benign preservation remained high.*
+
+### Perceptual Quality
+To quantify stealth, we computed LPIPS and FID scores. Our method achieved an average **LPIPS score of 0.132**, comparable to state-of-the-art diffusion attacks (e.g., DiffAttack at 0.126) and significantly better than color-based attacks.
+
+---
+
+## Future Work
+
+While SleeperDiff shows strong potential, there are several key areas not covered by this project:
+
+* **Dataset Expansion:** Validate our findings on a much larger dataset, as our current evaluation was limited to 100 images.
+* **Hyperparameter Tuning:** Systematically optimize the loss weights ($\lambda_{benign}$ and $\lambda_{EoT}$) to better understand the trade-offs between attack success, image quality, and computational cost.
+* **Advanced Capabilities:** Test more complex transformations, such as JPEG compression or diffusion purification, and investigate if these triggers can survive in the physical world (e.g., fooling real-world sensors rather than just digital classifiers).
+* **Transferability:** Dig deeper into *why* the transferability of this attack was poor in black-box settings. Investigating this overfitting will be critical for making the attack more robust.
+
+## Acknowledgements
+
+This project is adapted from the [DiffAttack](https://github.com/WindVChen/DiffAttack) codebase. We thank the original authors for their open-source contribution which served as the foundation for our latent-space optimization framework.
 
